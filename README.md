@@ -143,6 +143,12 @@ node esbuild.config.mjs production
 
 No external runtime dependencies. Uses Obsidian's built-in `requestUrl` for CORS-free HTTP and `MarkdownRenderer` for markdown conversion.
 
+## Support
+
+If you find this plugin useful, you can buy me a coffee:
+
+[![PayPal](https://img.shields.io/badge/PayPal-Donate-blue?logo=paypal)](https://www.paypal.com/donate/?business=alex.novickis%40gmail.com)
+
 ## License
 
 MIT
