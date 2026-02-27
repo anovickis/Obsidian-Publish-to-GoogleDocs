@@ -1,6 +1,6 @@
 {
     "name": "publish-to-google-docs",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Publish Obsidian notes to Google Docs",
     "main": "main.js",
     "scripts": {
