@@ -1,0 +1,13 @@
+/* Publish to Google Docs - Obsidian Plugin Styles */
+
+/* Update choice modal */
+.publish-gdocs-modal .modal-button-container {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 16px;
+}
+
+.publish-gdocs-modal .modal-button-container button {
+    min-width: 100px;
+}
