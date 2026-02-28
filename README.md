@@ -1,6 +1,24 @@
 # Publish to Google Docs — Obsidian Plugin
 
-Publish Obsidian notes to Google Docs with one click. Supports LaTeX math, images (including SVG rasterization), callout blocks, code blocks, tables, and more.
+Publish Obsidian notes to Google Docs, DOCX, and PDF with one click. Supports LaTeX math, images (including SVG rasterization), callout blocks, code blocks, tables, themes, batch export, and more.
+
+## Free vs Pro
+
+| Feature | Free | Pro ($20 lifetime) |
+|---------|:----:|:------------------:|
+| One-click publish to Google Docs | ✓ | ✓ |
+| LaTeX math (inline & display) | ✓ | ✓ |
+| Images with SVG→PNG rasterization | ✓ | ✓ |
+| Callout blocks, code, tables, blockquotes | ✓ | ✓ |
+| Update existing docs | ✓ | ✓ |
+| DOCX export | | ✓ |
+| PDF export | | ✓ |
+| Batch publish (entire folders) | | ✓ |
+| 5 document themes | | ✓ |
+| Table of Contents | | ✓ |
+| Custom header & footer | | ✓ |
+
+**[Get Pro on Gumroad →](https://9522178230608.gumroad.com/l/svsnaw)**
 
 ## Features
 
@@ -39,6 +57,29 @@ When re-publishing a note that already has a linked Google Doc, the plugin asks 
 - **Update existing** — creates a new version, moves the old doc to trash (recoverable)
 - **Create new** — makes a separate Google Doc
 
+### DOCX Export (Pro)
+Right-click any `.md` file → **"Export to DOCX"**. Generates a Word document saved alongside your note in the vault. Uses the selected theme for styling. Images are embedded as base64 — no Google Drive upload needed.
+
+### PDF Export (Pro)
+Right-click any `.md` file → **"Export to PDF"**. Opens a print dialog with your styled document ready to save as PDF.
+
+### Batch Publish (Pro)
+Right-click any folder → **"Publish folder to Google Docs"**. Publishes all markdown files in the folder (recursively, up to 50 notes) with a progress bar and cancel button. 1-second delay between notes to avoid API rate limits.
+
+### Document Themes (Pro)
+Five style presets applied to all exports:
+- **Default** — Clean sans-serif, matches v1 output
+- **Academic** — Serif fonts, conservative styling for papers
+- **Business** — Professional, blue accents
+- **Minimal** — Sparse, lots of whitespace, subtle styling
+- **Colorful** — Vibrant colors, playful feel
+
+### Table of Contents (Pro)
+Auto-generates a clickable TOC from your document headings, inserted at the top of the exported document.
+
+### Custom Header & Footer (Pro)
+Add text above the title (e.g., "CONFIDENTIAL", "DRAFT") or below the document (e.g., "Generated from Obsidian").
+
 ## Setup
 
 ### 1. Create a Google Cloud Project
@@ -61,7 +102,12 @@ When re-publishing a note that already has a linked Google Doc, the plugin asks 
 4. Authorize in the browser popup
 5. (Optional) Set a **Default Folder ID** from Google Drive to organize published docs
 
-### 4. (Optional) Auto-LaTeX Equations Add-on
+### 4. (Optional) Activate Pro License
+1. Purchase a license at [Gumroad](https://9522178230608.gumroad.com/l/svsnaw)
+2. In plugin settings, paste your license key and click **Activate**
+3. Pro features unlock immediately
+
+### 5. (Optional) Auto-LaTeX Equations Add-on
 To render LaTeX as formatted equations in Google Docs:
 1. Install the [Auto-LaTeX Equations](https://workspace.google.com/marketplace/app/auto_latex_equations/850293439076) add-on in Google Docs
 2. After publishing, open the Google Doc and run the add-on
@@ -80,6 +126,7 @@ Raw Markdown
   ↓ Render via Obsidian's MarkdownRenderer
   ↓ Restore LaTeX as \(...\) / \[...\]
   ↓ Upload images to Drive → replace placeholders with <img>
+  ↓ Apply theme styling
   ↓ Clean HTML for Google Docs (callouts, styles, strip classes)
   ↓ Wrap in HTML document
   ↓ Upload to Google Drive as Google Doc
@@ -103,6 +150,14 @@ Uses **OAuth 2.0 with PKCE** (Proof Key for Code Exchange):
 
 **Scope:** `drive.file` — the plugin can only access files it creates. It cannot read your other Drive files.
 
+### License Validation
+
+Pro licenses are validated against the Gumroad API:
+- Lifetime licenses are re-checked every 7 days
+- Subscription licenses are re-checked every 24 hours
+- 30-day offline grace period if the API is unreachable
+- No account creation needed — just a Gumroad license key
+
 ## Security
 
 - **Minimal scope:** Only `drive.file` (access files created by this plugin)
@@ -115,13 +170,18 @@ Uses **OAuth 2.0 with PKCE** (Proof Key for Code Exchange):
 
 ```
 src/
-├── main.ts          Plugin entry point, file menu registration
+├── main.ts          Plugin entry point, file/folder menu registration, What's New modal
 ├── auth.ts          OAuth 2.0 PKCE flow, loopback server, token management
-├── converter.ts     Markdown → HTML conversion pipeline
+├── converter.ts     Markdown → HTML conversion pipeline (with ConvertOptions)
 ├── google-api.ts    Google Drive API (create doc, upload image, delete)
 ├── publisher.ts     Orchestration, frontmatter, update-choice modal
-├── settings.ts      Settings UI tab
-└── types.ts         Shared interfaces and API constants
+├── settings.ts      Settings UI tab (license, credentials, auth, drive, export, advanced)
+├── types.ts         Shared interfaces, API constants, feature/tier types
+├── license.ts       Gumroad license validation, caching, feature gates
+├── docx-builder.ts  HTML DOM walker → DOCX objects (uses docx npm package)
+├── themes.ts        5 theme presets (Default, Academic, Business, Minimal, Colorful)
+├── toc.ts           Table of Contents generator from headings
+└── exporters.ts     DOCX export, PDF export, batch publish
 ```
 
 ## Building from Source
@@ -138,14 +198,14 @@ node esbuild.config.mjs production
 
 ## Dependencies
 
-- **Runtime:** [Obsidian API](https://github.com/obsidianmd/obsidian-api)
+- **Runtime:** [Obsidian API](https://github.com/obsidianmd/obsidian-api), [docx](https://www.npmjs.com/package/docx) ^9.6.0
 - **Build:** TypeScript 5.8, esbuild 0.24
 
-No external runtime dependencies. Uses Obsidian's built-in `requestUrl` for CORS-free HTTP and `MarkdownRenderer` for markdown conversion.
+Uses Obsidian's built-in `requestUrl` for CORS-free HTTP and `MarkdownRenderer` for markdown conversion.
 
 ## Support
 
-If you find this plugin useful, you can buy me a coffee:
+If you find this plugin useful, consider getting [Pro](https://9522178230608.gumroad.com/l/svsnaw) or donating:
 
 [![PayPal](https://img.shields.io/badge/PayPal-Donate-blue?logo=paypal)](https://www.paypal.com/donate/?business=alex.novickis%40gmail.com)
 
