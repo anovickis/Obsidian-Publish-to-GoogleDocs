@@ -17,6 +17,9 @@ import {
     MarkdownRenderer,
     TFile,
 } from 'obsidian';
+import { ConvertOptions, DEFAULT_CONVERT_OPTIONS } from './types';
+import { getTheme, Theme } from './themes';
+import { addTableOfContents } from './toc';
 
 // ============================================================
 // Types
@@ -204,14 +207,15 @@ async function processAndRestoreImages(
     imageExtractions: ImageExtraction[],
     app: App,
     file: TFile,
-    uploadImageFn: (data: ArrayBuffer, name: string, mimeType: string) => Promise<string>,
+    uploadImageFn: ((data: ArrayBuffer, name: string, mimeType: string) => Promise<string>) | null,
+    imageMode: 'upload' | 'embed' = 'upload',
 ): Promise<string> {
     let result = html;
 
-    // Process in batches of 5 for parallel uploads
+    // Process in batches of 5
     for (let i = 0; i < imageExtractions.length; i += 5) {
         const batch = imageExtractions.slice(i, i + 5);
-        const uploadResults = await Promise.all(
+        const processedResults = await Promise.all(
             batch.map(async (img) => {
                 try {
                     const imageFile = app.metadataCache.getFirstLinkpathDest(
@@ -236,21 +240,37 @@ async function processAndRestoreImages(
 
                     if (mimeType === 'image/jpg') mimeType = 'image/jpeg';
 
-                    const publicUrl = await uploadImageFn(imageData, fileName, mimeType);
+                    let src: string;
+                    if (imageMode === 'embed') {
+                        // Embed as base64 data URI (for DOCX/PDF export — no network needed)
+                        const bytes = new Uint8Array(imageData);
+                        let binary = '';
+                        for (let j = 0; j < bytes.length; j++) {
+                            binary += String.fromCharCode(bytes[j]);
+                        }
+                        const base64 = btoa(binary);
+                        src = `data:${mimeType};base64,${base64}`;
+                    } else {
+                        // Upload to Google Drive and use the public URL
+                        if (!uploadImageFn) {
+                            throw new Error('uploadImageFn required for upload mode');
+                        }
+                        src = await uploadImageFn(imageData, fileName, mimeType);
+                    }
 
-                    let tag = `<img src="${publicUrl}" alt="${escapeHtml(img.alt || imageFile.basename)}"`;
+                    let tag = `<img src="${src}" alt="${escapeHtml(img.alt || imageFile.basename)}"`;
                     if (img.width) tag += ` width="${img.width}"`;
                     tag += ` style="max-width:100%;">`;
 
                     return { img, tag };
                 } catch (err) {
                     console.error(`Failed to process image ${img.vaultPath}:`, err);
-                    return { img, tag: `<em>[Failed to upload: ${img.vaultPath}]</em>` };
+                    return { img, tag: `<em>[Failed to process: ${img.vaultPath}]</em>` };
                 }
             }),
         );
 
-        for (const r of uploadResults) {
+        for (const r of processedResults) {
             // Placeholder may be wrapped in <p> tags (block-level image on its own line)
             const blockPattern = `<p>${r.img.placeholder}</p>`;
             if (result.includes(blockPattern)) {
@@ -367,7 +387,9 @@ const CALLOUT_COLORS: Record<string, string> = {
     cite: '#9e9e9e',
 };
 
-function cleanHtmlForGoogleDocs(html: string): string {
+function cleanHtmlForGoogleDocs(html: string, theme?: Theme): string {
+    // Use default theme values if not provided (matches v1 output exactly)
+    const t = theme || getTheme('default');
     let result = html;
 
     // Convert callout divs to styled tables
@@ -379,7 +401,7 @@ function cleanHtmlForGoogleDocs(html: string): string {
                 .replace(/<div[^>]*class="[^"]*callout-title[^"]*"[^>]*>/gi, '<b>')
                 .replace(/<div[^>]*class="[^"]*callout-content[^"]*"[^>]*>/gi, '')
                 .replace(/<\/div>/gi, '</b><br/>');
-            return `<table style="border-left:4px solid ${color};background:#f8f9fa;width:100%;margin:12px 0;">
+            return `<table style="border-left:4px solid ${color};background:${t.calloutBackground};width:100%;margin:12px 0;">
                 <tr><td style="padding:12px;">${cleanContent}</td></tr></table>`;
         },
     );
@@ -390,34 +412,34 @@ function cleanHtmlForGoogleDocs(html: string): string {
         '<b>$1</b>',
     );
 
-    // Inline styles for code blocks
+    // Inline styles for code blocks (themed)
     result = result.replace(
         /<pre>/gi,
-        '<pre style="background:#f5f5f5;padding:16px;border-radius:4px;font-family:\'Courier New\',monospace;white-space:pre;overflow-x:auto;font-size:13px;">',
+        `<pre style="background:${t.codeBlockBackground};padding:${t.codeBlockPadding};border-radius:4px;font-family:${t.codeFontFamily};white-space:pre;overflow-x:auto;font-size:${t.codeFontSize};">`,
     );
     result = result.replace(
         /<code>/gi,
-        '<code style="background:#f5f5f5;padding:2px 4px;border-radius:3px;font-family:\'Courier New\',monospace;font-size:13px;">',
+        `<code style="background:${t.codeBackground};padding:2px 4px;border-radius:3px;font-family:${t.codeFontFamily};font-size:${t.codeFontSize};">`,
     );
 
-    // Inline styles for blockquotes
+    // Inline styles for blockquotes (themed)
     result = result.replace(
         /<blockquote>/gi,
-        '<blockquote style="border-left:4px solid #ccc;padding-left:16px;margin-left:0;color:#666;">',
+        `<blockquote style="border-left:4px solid ${t.blockquoteBorderColor};padding-left:16px;margin-left:0;color:${t.blockquoteTextColor};">`,
     );
 
-    // Inline styles for tables (only those without existing style)
+    // Inline styles for tables (themed, only those without existing style)
     result = result.replace(
         /<table(?![^>]*style)/gi,
-        '<table style="border-collapse:collapse;width:100%;margin:12px 0;"',
+        `<table style="border-collapse:collapse;width:100%;margin:12px 0;"`,
     );
     result = result.replace(
         /<th(?![^>]*style)/gi,
-        '<th style="border:1px solid #ddd;padding:8px;background:#f5f5f5;text-align:left;"',
+        `<th style="border:1px solid ${t.tableBorderColor};padding:8px;background:${t.tableHeaderBackground};text-align:left;"`,
     );
     result = result.replace(
         /<td(?![^>]*style)/gi,
-        '<td style="border:1px solid #ddd;padding:8px;"',
+        `<td style="border:1px solid ${t.tableBorderColor};padding:8px;"`,
     );
 
     // Strip Obsidian-specific class and data attributes
@@ -439,18 +461,23 @@ function cleanHtmlForGoogleDocs(html: string): string {
 // ============================================================
 
 /**
- * Convert an Obsidian note to clean HTML ready for Google Docs.
+ * Convert an Obsidian note to clean HTML ready for Google Docs or local export.
  *
  * @param app - Obsidian App instance
  * @param file - The markdown file to convert
- * @param uploadImageFn - Callback to upload an image and return its public URL
+ * @param uploadImageFn - Callback to upload an image and return its public URL (null for embed mode)
+ * @param options - Conversion options (theme, TOC, imageMode, header/footer)
  * @returns Complete HTML document string
  */
 export async function convertNoteToHtml(
     app: App,
     file: TFile,
-    uploadImageFn: (data: ArrayBuffer, name: string, mimeType: string) => Promise<string>,
+    uploadImageFn: ((data: ArrayBuffer, name: string, mimeType: string) => Promise<string>) | null,
+    options?: Partial<ConvertOptions>,
 ): Promise<string> {
+    const opts: ConvertOptions = { ...DEFAULT_CONVERT_OPTIONS, ...options };
+    const theme = getTheme(opts.theme);
+
     // 1. Read and strip frontmatter
     const rawMarkdown = await app.vault.read(file);
     const markdown = stripFrontmatter(rawMarkdown);
@@ -477,23 +504,46 @@ export async function convertNoteToHtml(
     // 7. Restore LaTeX (placeholders → raw $LaTeX$ / $$LaTeX$$ text)
     html = restoreMathInHtml(html, mathExtractions);
 
-    // 8. Upload images and restore (placeholders → <img src="drive_url">)
-    html = await processAndRestoreImages(html, imageExtractions, app, file, uploadImageFn);
+    // 8. Process images: either upload to Drive or embed as base64
+    html = await processAndRestoreImages(
+        html, imageExtractions, app, file, uploadImageFn, opts.imageMode,
+    );
 
-    // 9. Clean HTML for Google Docs compatibility
-    html = cleanHtmlForGoogleDocs(html);
+    // 9. Clean HTML for Google Docs compatibility (themed)
+    html = cleanHtmlForGoogleDocs(html, theme);
 
-    // 10. Wrap in a complete HTML document
+    // 10. Add table of contents if requested
+    if (opts.includeToc) {
+        html = addTableOfContents(html);
+    }
+
+    // 11. Wrap in a complete HTML document
     const title = file.basename;
+
+    // Optional header
+    const headerHtml = opts.headerText
+        ? `<p style="color:#888;font-size:12px;margin-bottom:4px;">${escapeHtml(opts.headerText)}</p>`
+        : '';
+
+    // Optional footer
+    const footerHtml = opts.footerText
+        ? `<hr style="border:none;border-top:1px solid #ddd;margin-top:40px;"><p style="color:#888;font-size:12px;">${escapeHtml(opts.footerText)}</p>`
+        : '';
+
     return `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <title>${title}</title>
 </head>
-<body style="font-family:Arial,sans-serif;max-width:800px;margin:auto;line-height:1.6;">
-<h1>${title}</h1>
+<body style="font-family:${theme.fontFamily};max-width:${theme.maxWidth};margin:auto;line-height:${theme.lineHeight};font-size:${theme.fontSize};color:${theme.textColor};">
+${headerHtml}
+<h1 style="font-family:${theme.headingFontFamily};color:${theme.headingColor};font-size:${theme.h1Size};">${title}</h1>
 ${html}
+${footerHtml}
 </body>
 </html>`;
 }
+
+// Re-export rasterizeSvgToPng for use by docx-builder and other exporters
+export { rasterizeSvgToPng };

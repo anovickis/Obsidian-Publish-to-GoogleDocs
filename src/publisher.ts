@@ -153,7 +153,16 @@ export async function publishNote(
             );
         };
 
-        const html = await convertNoteToHtml(plugin.app, file, uploadImage);
+        // Build conversion options from plugin settings
+        const convertOptions = {
+            imageMode: 'upload' as const,
+            theme: plugin.settings.theme,
+            includeToc: plugin.settings.includeToc,
+            headerText: plugin.settings.customHeaderText || undefined,
+            footerText: plugin.settings.customFooterText || undefined,
+        };
+
+        const html = await convertNoteToHtml(plugin.app, file, uploadImage, convertOptions);
 
         // 7. Create new Google Doc
         const docName = file.basename;

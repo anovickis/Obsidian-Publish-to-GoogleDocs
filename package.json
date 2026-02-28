@@ -1,7 +1,7 @@
 {
     "name": "publish-to-google-docs",
-    "version": "1.0.1",
-    "description": "Publish Obsidian notes to Google Docs",
+    "version": "2.0.0",
+    "description": "Publish Obsidian notes to Google Docs, DOCX, and PDF",
     "main": "main.js",
     "scripts": {
         "dev": "node esbuild.config.mjs",
@@ -16,5 +16,8 @@
         "obsidian": "latest",
         "tslib": "2.8.1",
         "typescript": "5.8.3"
+    },
+    "dependencies": {
+        "docx": "^9.6.0"
     }
 }
