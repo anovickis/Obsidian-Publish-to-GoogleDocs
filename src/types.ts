@@ -16,7 +16,10 @@ export type Feature =
     | 'true-update'
     | 'auto-publish'
     | 'history'
-    | 'team';
+    | 'team'
+    | 'platform-export';
+
+export type TargetFormat = 'google-docs' | 'medium' | 'linkedin';
 
 export type ThemeName = 'default' | 'academic' | 'business' | 'minimal' | 'colorful';
 
@@ -45,6 +48,7 @@ export interface PluginSettings {
     customHeaderText: string;
     customFooterText: string;
     resolveWikilinks: boolean;
+    defaultTargetFormat: TargetFormat;
 
     // Premium settings
     autoPublishOnSave: boolean;
@@ -76,6 +80,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
     customHeaderText: '',
     customFooterText: '',
     resolveWikilinks: false,
+    defaultTargetFormat: 'google-docs',
 
     // Premium settings
     autoPublishOnSave: false,
@@ -114,12 +119,14 @@ export interface ConvertOptions {
     includeToc: boolean;       // auto-generate table of contents from headings
     headerText?: string;       // custom header text above title
     footerText?: string;       // custom footer text at document end
+    targetFormat: TargetFormat; // target platform for output formatting
 }
 
 export const DEFAULT_CONVERT_OPTIONS: ConvertOptions = {
     imageMode: 'upload',
     theme: 'default',
     includeToc: false,
+    targetFormat: 'google-docs',
 };
 
 // ---- Conversion Types ----

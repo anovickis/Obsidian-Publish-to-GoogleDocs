@@ -17,9 +17,10 @@ import {
     MarkdownRenderer,
     TFile,
 } from 'obsidian';
-import { ConvertOptions, DEFAULT_CONVERT_OPTIONS } from './types';
+import { ConvertOptions, DEFAULT_CONVERT_OPTIONS, TargetFormat } from './types';
 import { getTheme, Theme } from './themes';
 import { addTableOfContents } from './toc';
+import { renderLatexToImage } from './math-renderer';
 
 // ============================================================
 // Types
@@ -98,10 +99,12 @@ function extractMath(markdown: string): { cleaned: string; math: MathExtraction[
         return placeholder;
     });
 
-    // Inline math: $...$ (single line, not preceded/followed by $)
+    // Inline math: $...$ (single line, not preceded/followed by $$)
     // Requires non-space after opening $ and before closing $ to avoid
-    // false matches on currency like "costs $5 or $10"
-    cleaned = cleaned.replace(/(?<!\$)\$(?!\$|\s)([^$\n]+?)(?<!\s)\$(?!\$)/g, (match, latex) => {
+    // false matches on currency like "costs $5 or $10".
+    // Only rejects $$ (display math delimiter), not single $ (adjacent inline math).
+    // Display math is already extracted above, so $$ should not appear here.
+    cleaned = cleaned.replace(/(?<!\$)\$(?!\$\$|\s)([^$\n]+?)(?<!\s)\$(?!\$\$)/g, (match, latex) => {
         const placeholder = `GDOCS_MI${math.length}`;
         math.push({ placeholder, original: match, isDisplay: false, latex: latex.trim() });
         return placeholder;
@@ -184,16 +187,53 @@ function escapeHtml(text: string): string {
         .replace(/"/g, '&quot;');
 }
 
-function restoreMathInHtml(html: string, math: MathExtraction[]): string {
+function restoreMathInHtml(
+    html: string,
+    math: MathExtraction[],
+    targetFormat: TargetFormat,
+): string {
     let result = html;
     for (const m of math) {
         const latexHtml = escapeHtml(m.latex);
-        // Use \(...\) and \[...\] delimiters instead of $...$ and $$...$$
-        // These are unambiguous two-character sequences that won't be confused
-        // with each other or with parentheses, currency, etc.
-        // The Auto-LaTeX Equations add-on supports both delimiter styles.
-        const restored = m.isDisplay ? `\\[${latexHtml}\\]` : `\\(${latexHtml}\\)`;
+        let restored: string;
+        if (targetFormat === 'google-docs') {
+            // Use $...$ and $$...$$ for the Auto-LaTeX Equations add-on.
+            // These are the primary delimiters that Auto-LaTeX reliably recognizes.
+            restored = m.isDisplay ? `$$${latexHtml}$$` : `$${latexHtml}$`;
+        } else {
+            // For DOCX/local export: keep \(...\) and \[...\] which the
+            // docx-builder parses to render math as images.
+            restored = m.isDisplay ? `\\[${latexHtml}\\]` : `\\(${latexHtml}\\)`;
+        }
         result = result.split(m.placeholder).join(restored);
+    }
+    return result;
+}
+
+/**
+ * Replace math placeholders with rendered PNG images (for Medium, LinkedIn).
+ * Each LaTeX expression is rendered via MathJax and rasterized to an inline image.
+ */
+async function restoreMathAsImages(
+    html: string,
+    math: MathExtraction[],
+): Promise<string> {
+    let result = html;
+    for (const m of math) {
+        try {
+            const img = await renderLatexToImage(m.latex, m.isDisplay);
+            const altText = escapeHtml(m.latex);
+            const style = m.isDisplay
+                ? 'display:block;margin:12px auto;'
+                : 'display:inline;vertical-align:middle;height:1.2em;';
+            const tag = `<img src="${img.dataUri}" alt="${altText}" style="${style}">`;
+            result = result.split(m.placeholder).join(tag);
+        } catch (err) {
+            console.warn(`Failed to render LaTeX as image: ${m.latex}`, err);
+            // Fallback: insert the LaTeX source as italic text
+            const fallback = `<em>${escapeHtml(m.latex)}</em>`;
+            result = result.split(m.placeholder).join(fallback);
+        }
     }
     return result;
 }
@@ -457,6 +497,146 @@ function cleanHtmlForGoogleDocs(html: string, theme?: Theme): string {
 }
 
 // ============================================================
+// Platform-Specific HTML Cleanup (Medium, LinkedIn)
+// ============================================================
+
+/**
+ * Clean HTML for Medium compatibility.
+ * Medium supports: bold, italic, H1/H2, blockquotes, lists, code blocks, images, links.
+ * Medium does NOT support: tables, H3-H6, callouts, inline styles (stripped on paste).
+ */
+function cleanHtmlForMedium(html: string): string {
+    let result = html;
+
+    // Convert callout divs to blockquotes (Medium doesn't support callouts)
+    result = result.replace(
+        /<div[^>]*data-callout="([^"]*)"[^>]*class="[^"]*callout[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/gi,
+        (_, _type, content) => {
+            const cleanContent = content
+                .replace(/<div[^>]*class="[^"]*callout-title[^"]*"[^>]*>/gi, '<b>')
+                .replace(/<div[^>]*class="[^"]*callout-content[^"]*"[^>]*>/gi, '')
+                .replace(/<\/div>/gi, '</b><br/>');
+            return `<blockquote>${cleanContent}</blockquote>`;
+        },
+    );
+
+    // Demote H3-H6 to H2 (Medium only supports H1 and H2)
+    result = result.replace(/<h[3-6]([^>]*)>/gi, '<h2$1>');
+    result = result.replace(/<\/h[3-6]>/gi, '</h2>');
+
+    // Convert tables to structured text (Medium doesn't support tables)
+    result = result.replace(
+        /<table[^>]*>([\s\S]*?)<\/table>/gi,
+        (_, tableContent) => {
+            // Extract rows and convert to a readable format
+            const rows: string[] = [];
+            const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+            let rowMatch: RegExpExecArray | null;
+            while ((rowMatch = rowRegex.exec(tableContent)) !== null) {
+                const cells: string[] = [];
+                const cellRegex = /<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/gi;
+                let cellMatch: RegExpExecArray | null;
+                while ((cellMatch = cellRegex.exec(rowMatch[1])) !== null) {
+                    cells.push(cellMatch[1].replace(/<[^>]*>/g, '').trim());
+                }
+                if (cells.length > 0) {
+                    rows.push(cells.join(' | '));
+                }
+            }
+            return `<p>${rows.join('<br>')}</p>`;
+        },
+    );
+
+    // Convert wikilinks to bold text
+    result = result.replace(
+        /<a[^>]*class="[^"]*internal-link[^"]*"[^>]*>(.*?)<\/a>/gi,
+        '<b>$1</b>',
+    );
+
+    // Strip Obsidian-specific class and data attributes
+    result = result.replace(/\s+class="[^"]*"/gi, '');
+    result = result.replace(/\s+data-[a-z-]+="[^"]*"/gi, '');
+
+    // Clean up empty paragraphs
+    result = result.replace(/<p>\s*<\/p>/gi, '');
+
+    // Remove leftover MathJax containers
+    result = result.replace(/<mjx-container[^>]*>[\s\S]*?<\/mjx-container>/gi, '');
+
+    return result;
+}
+
+/**
+ * Clean HTML for LinkedIn compatibility.
+ * LinkedIn articles support: bold, italic, underline, H1/H2, blockquotes,
+ * lists, code snippets, images, links.
+ * LinkedIn does NOT support: tables, H3-H6, callouts, complex styling.
+ */
+function cleanHtmlForLinkedIn(html: string): string {
+    let result = html;
+
+    // Convert callout divs to blockquotes
+    result = result.replace(
+        /<div[^>]*data-callout="([^"]*)"[^>]*class="[^"]*callout[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/gi,
+        (_, _type, content) => {
+            const cleanContent = content
+                .replace(/<div[^>]*class="[^"]*callout-title[^"]*"[^>]*>/gi, '<b>')
+                .replace(/<div[^>]*class="[^"]*callout-content[^"]*"[^>]*>/gi, '')
+                .replace(/<\/div>/gi, '</b><br/>');
+            return `<blockquote>${cleanContent}</blockquote>`;
+        },
+    );
+
+    // Demote H3-H6 to H2
+    result = result.replace(/<h[3-6]([^>]*)>/gi, '<h2$1>');
+    result = result.replace(/<\/h[3-6]>/gi, '</h2>');
+
+    // Remove tables entirely (LinkedIn doesn't support them at all)
+    // Replace with a simple paragraph listing cell contents
+    result = result.replace(
+        /<table[^>]*>([\s\S]*?)<\/table>/gi,
+        (_, tableContent) => {
+            const rows: string[] = [];
+            const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+            let rowMatch: RegExpExecArray | null;
+            while ((rowMatch = rowRegex.exec(tableContent)) !== null) {
+                const cells: string[] = [];
+                const cellRegex = /<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/gi;
+                let cellMatch: RegExpExecArray | null;
+                while ((cellMatch = cellRegex.exec(rowMatch[1])) !== null) {
+                    cells.push(cellMatch[1].replace(/<[^>]*>/g, '').trim());
+                }
+                if (cells.length > 0) {
+                    rows.push(cells.join(' — '));
+                }
+            }
+            return `<p>${rows.join('<br>')}</p>`;
+        },
+    );
+
+    // Convert wikilinks to bold text
+    result = result.replace(
+        /<a[^>]*class="[^"]*internal-link[^"]*"[^>]*>(.*?)<\/a>/gi,
+        '<b>$1</b>',
+    );
+
+    // Strip all inline styles (LinkedIn strips them anyway)
+    result = result.replace(/\s+style="[^"]*"/gi, '');
+
+    // Strip Obsidian-specific class and data attributes
+    result = result.replace(/\s+class="[^"]*"/gi, '');
+    result = result.replace(/\s+data-[a-z-]+="[^"]*"/gi, '');
+
+    // Clean up empty paragraphs
+    result = result.replace(/<p>\s*<\/p>/gi, '');
+
+    // Remove leftover MathJax containers
+    result = result.replace(/<mjx-container[^>]*>[\s\S]*?<\/mjx-container>/gi, '');
+
+    return result;
+}
+
+// ============================================================
 // Full Pipeline
 // ============================================================
 
@@ -501,16 +681,31 @@ export async function convertNoteToHtml(
     //    No MathJax rendering (no $ delimiters), no image loading (no ![[]] syntax).
     let html = await renderMarkdownToHtml(app, renderMd, file.path);
 
-    // 7. Restore LaTeX (placeholders → raw $LaTeX$ / $$LaTeX$$ text)
-    html = restoreMathInHtml(html, mathExtractions);
+    // 7. Restore LaTeX based on target format
+    if (opts.targetFormat === 'medium' || opts.targetFormat === 'linkedin') {
+        // Render math as inline PNG images (these platforms don't support LaTeX)
+        html = await restoreMathAsImages(html, mathExtractions);
+    } else {
+        // Google Docs / DOCX: restore as text delimiters
+        html = restoreMathInHtml(html, mathExtractions, opts.targetFormat);
+    }
 
     // 8. Process images: either upload to Drive or embed as base64
+    //    For Medium/LinkedIn clipboard copy, always embed as base64
+    const effectiveImageMode = (opts.targetFormat === 'medium' || opts.targetFormat === 'linkedin')
+        ? 'embed' : opts.imageMode;
     html = await processAndRestoreImages(
-        html, imageExtractions, app, file, uploadImageFn, opts.imageMode,
+        html, imageExtractions, app, file, uploadImageFn, effectiveImageMode,
     );
 
-    // 9. Clean HTML for Google Docs compatibility (themed)
-    html = cleanHtmlForGoogleDocs(html, theme);
+    // 9. Clean HTML for target platform
+    if (opts.targetFormat === 'medium') {
+        html = cleanHtmlForMedium(html);
+    } else if (opts.targetFormat === 'linkedin') {
+        html = cleanHtmlForLinkedIn(html);
+    } else {
+        html = cleanHtmlForGoogleDocs(html, theme);
+    }
 
     // 10. Add table of contents if requested
     if (opts.includeToc) {

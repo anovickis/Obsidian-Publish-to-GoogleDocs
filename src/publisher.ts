@@ -21,6 +21,8 @@ import {
     extractDocId,
 } from './google-api';
 import { getValidToken } from './auth';
+import { TargetFormat } from './types';
+import { copyHtmlToClipboard, htmlToPlainText } from './clipboard';
 
 // ---- Choice Modal ----
 
@@ -101,7 +103,15 @@ function showUpdateChoiceModal(app: App): Promise<UpdateChoice> {
 export async function publishNote(
     plugin: PublishToGoogleDocsPlugin,
     file: TFile,
+    targetFormat: TargetFormat = 'google-docs',
 ): Promise<void> {
+    // ---- Clipboard path for Medium / LinkedIn ----
+    if (targetFormat === 'medium' || targetFormat === 'linkedin') {
+        return publishForPlatform(plugin, file, targetFormat);
+    }
+
+    // ---- Google Docs path (existing behavior) ----
+
     // 1. Validate credentials
     if (!plugin.settings.clientId || !plugin.settings.clientSecret) {
         new Notice('Please configure Google API credentials in the plugin settings first.');
@@ -160,6 +170,7 @@ export async function publishNote(
             includeToc: plugin.settings.includeToc,
             headerText: plugin.settings.customHeaderText || undefined,
             footerText: plugin.settings.customFooterText || undefined,
+            targetFormat: 'google-docs' as const,
         };
 
         const html = await convertNoteToHtml(plugin.app, file, uploadImage, convertOptions);
@@ -221,7 +232,7 @@ export async function publishNote(
 
             // Retry once
             try {
-                await publishNote(plugin, file);
+                await publishNote(plugin, file, targetFormat);
             } catch (retryErr) {
                 new Notice(`Publish failed after retry: ${(retryErr as Error).message}`);
             }
@@ -230,5 +241,50 @@ export async function publishNote(
 
         new Notice(`Publish failed: ${(err as Error).message}`);
         console.error('Publish to Google Docs error:', err);
+    }
+}
+
+// ---- Platform Export (Medium / LinkedIn) ----
+
+/**
+ * Convert a note for a specific platform and copy to clipboard.
+ * No Google Drive upload — the user pastes into the target platform's editor.
+ */
+async function publishForPlatform(
+    plugin: PublishToGoogleDocsPlugin,
+    file: TFile,
+    targetFormat: TargetFormat,
+): Promise<void> {
+    const platformName = targetFormat === 'medium' ? 'Medium' : 'LinkedIn';
+    const progressNotice = new Notice(`Preparing for ${platformName}...`, 0);
+
+    try {
+        // Convert with embedded images (no Drive upload) and platform-specific formatting
+        const convertOptions = {
+            imageMode: 'embed' as const,
+            theme: plugin.settings.theme,
+            includeToc: plugin.settings.includeToc,
+            headerText: plugin.settings.customHeaderText || undefined,
+            footerText: plugin.settings.customFooterText || undefined,
+            targetFormat,
+        };
+
+        const html = await convertNoteToHtml(plugin.app, file, null, convertOptions);
+
+        // Copy to clipboard as rich HTML
+        const plainText = htmlToPlainText(html);
+        await copyHtmlToClipboard(html, plainText);
+
+        progressNotice.hide();
+        new Notice(
+            `Copied for ${platformName}!\n` +
+            `Math rendered as images. Paste into ${platformName}'s editor.`,
+            8000,
+        );
+
+    } catch (err) {
+        progressNotice.hide();
+        new Notice(`${platformName} export failed: ${(err as Error).message}`);
+        console.error(`${platformName} export error:`, err);
     }
 }

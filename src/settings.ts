@@ -12,7 +12,7 @@
 import { App, Notice, PluginSettingTab, Setting } from 'obsidian';
 import type PublishToGoogleDocsPlugin from './main';
 import { authenticate } from './auth';
-import { ThemeName } from './types';
+import { ThemeName, TargetFormat } from './types';
 import {
     activateLicense,
     deactivateLicense,
@@ -362,6 +362,27 @@ export class PublishSettingTab extends PluginSettingTab {
         } else {
             footerSetting.setDisabled(true);
             footerSetting.descEl.textContent += ' (Pro)';
+        }
+
+        // Default target format
+        const formatSetting = new Setting(containerEl)
+            .setName('Default target platform')
+            .setDesc('Platform to format for when using "Copy for..." menu items');
+
+        if (isPro) {
+            formatSetting.addDropdown((dropdown) => {
+                dropdown.addOption('google-docs', 'Google Docs — LaTeX as text (Auto-LaTeX add-on)');
+                dropdown.addOption('medium', 'Medium — math as images, simplified HTML');
+                dropdown.addOption('linkedin', 'LinkedIn — math as images, minimal HTML');
+                dropdown.setValue(this.plugin.settings.defaultTargetFormat);
+                dropdown.onChange(async (value) => {
+                    this.plugin.settings.defaultTargetFormat = value as TargetFormat;
+                    await this.plugin.saveSettings();
+                });
+            });
+        } else {
+            formatSetting.setDisabled(true);
+            formatSetting.descEl.textContent += ' (Pro)';
         }
     }
 

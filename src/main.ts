@@ -15,11 +15,12 @@ import {
     TFolder,
     TAbstractFile,
 } from 'obsidian';
-import { PluginSettings, DEFAULT_SETTINGS } from './types';
+import { PluginSettings, DEFAULT_SETTINGS, TargetFormat } from './types';
 import { PublishSettingTab } from './settings';
 import { publishNote } from './publisher';
 import { exportToDocx, exportToPdf, batchPublishFolder } from './exporters';
 import { hasFeature, validateLicense, showUpgradeNotice } from './license';
+import { showFormatModal } from './format-modal';
 
 const PLUGIN_VERSION = '2.0.0';
 
@@ -81,6 +82,42 @@ export default class PublishToGoogleDocsPlugin extends Plugin {
                             } catch (err) {
                                 console.error('PDF export error:', err);
                                 new Notice(`PDF export failed: ${(err as Error).message}`);
+                            }
+                        });
+                });
+
+                // Pro: Copy for Medium
+                menu.addItem((item) => {
+                    item.setTitle('Copy for Medium')
+                        .setIcon('clipboard-copy')
+                        .onClick(async () => {
+                            if (!hasFeature(this.settings, 'platform-export')) {
+                                showUpgradeNotice('platform-export');
+                                return;
+                            }
+                            try {
+                                await publishNote(this, file, 'medium');
+                            } catch (err) {
+                                console.error('Medium export error:', err);
+                                new Notice(`Medium export failed: ${(err as Error).message}`);
+                            }
+                        });
+                });
+
+                // Pro: Copy for LinkedIn
+                menu.addItem((item) => {
+                    item.setTitle('Copy for LinkedIn')
+                        .setIcon('clipboard-copy')
+                        .onClick(async () => {
+                            if (!hasFeature(this.settings, 'platform-export')) {
+                                showUpgradeNotice('platform-export');
+                                return;
+                            }
+                            try {
+                                await publishNote(this, file, 'linkedin');
+                            } catch (err) {
+                                console.error('LinkedIn export error:', err);
+                                new Notice(`LinkedIn export failed: ${(err as Error).message}`);
                             }
                         });
                 });

@@ -29,6 +29,7 @@ import {
 import { ThemeName } from './types';
 import { getTheme, Theme } from './themes';
 import { rasterizeSvgToPng } from './converter';
+import { renderLatexToImage } from './math-renderer';
 
 // ---- Constants ----
 
@@ -57,76 +58,17 @@ const TABLE_BORDERS: ITableCellBorders = {
 // ---- LaTeX → PNG Rendering ----
 
 /**
- * Render a LaTeX expression to a PNG ArrayBuffer using canvas.
- * Uses an offscreen SVG rendered through the same pipeline as SVG rasterization.
+ * Render a LaTeX expression to a PNG ArrayBuffer.
+ * Delegates to the shared math-renderer which uses Obsidian's MathJax
+ * to produce real typeset math (not plaintext).
  */
 async function renderLatexToPng(latex: string, isDisplay: boolean): Promise<{
     data: ArrayBuffer;
     width: number;
     height: number;
 }> {
-    // Build a minimal SVG containing the LaTeX text
-    // We use foreignObject to render HTML/MathML inside SVG
-    const fontSize = isDisplay ? 20 : 16;
-    const padding = isDisplay ? 20 : 4;
-
-    // Create a temporary container to measure the rendered LaTeX
-    const container = document.createElement('div');
-    container.style.position = 'absolute';
-    container.style.visibility = 'hidden';
-    container.style.fontSize = `${fontSize}px`;
-    container.style.fontFamily = 'serif';
-    container.style.padding = `${padding}px`;
-    container.style.display = isDisplay ? 'block' : 'inline-block';
-    container.style.whiteSpace = 'nowrap';
-    container.textContent = latex; // Plain text fallback for measurement
-    document.body.appendChild(container);
-
-    const measuredWidth = Math.max(container.offsetWidth + padding * 2, 50);
-    const measuredHeight = Math.max(container.offsetHeight + padding * 2, 30);
-    document.body.removeChild(container);
-
-    // Render as canvas
-    const scale = 2;
-    const canvasWidth = measuredWidth * scale;
-    const canvasHeight = measuredHeight * scale;
-
-    const canvas = document.createElement('canvas');
-    canvas.width = canvasWidth;
-    canvas.height = canvasHeight;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
-        throw new Error('Failed to get canvas 2d context for LaTeX rendering');
-    }
-
-    // White background
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
-
-    // Render the LaTeX text
-    ctx.fillStyle = '#000000';
-    ctx.font = `${fontSize * scale}px serif`;
-    ctx.textBaseline = 'middle';
-
-    if (isDisplay) {
-        ctx.textAlign = 'center';
-        ctx.fillText(latex, canvasWidth / 2, canvasHeight / 2);
-    } else {
-        ctx.textAlign = 'left';
-        ctx.fillText(latex, padding * scale, canvasHeight / 2);
-    }
-
-    // Convert to PNG
-    const blob = await new Promise<Blob>((resolve, reject) => {
-        canvas.toBlob((b) => {
-            if (b) resolve(b);
-            else reject(new Error('Canvas toBlob failed'));
-        }, 'image/png');
-    });
-
-    const data = await blob.arrayBuffer();
-    return { data, width: measuredWidth, height: measuredHeight };
+    const result = await renderLatexToImage(latex, isDisplay);
+    return { data: result.data, width: result.width, height: result.height };
 }
 
 // ---- Image Fetching ----

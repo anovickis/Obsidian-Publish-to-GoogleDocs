@@ -38,6 +38,7 @@ const FEATURE_TIER: Record<Feature, number> = {
     'wikilink-resolve': 1,
     'header-footer': 1,
     'mermaid': 1,
+    'platform-export': 1,
     'true-update': 2,
     'auto-publish': 2,
     'history': 2,
