@@ -13,6 +13,9 @@ export type Feature =
     | 'wikilink-resolve'
     | 'header-footer'
     | 'mermaid'
+    | 'embed-resolve'
+    | 'footnotes'
+    | 'auto-numbering'
     | 'true-update'
     | 'auto-publish'
     | 'history'
@@ -49,6 +52,10 @@ export interface PluginSettings {
     customFooterText: string;
     resolveWikilinks: boolean;
     defaultTargetFormat: TargetFormat;
+    resolveEmbeds: boolean;
+    renderMermaid: boolean;
+    handleFootnotes: boolean;
+    autoNumberFigures: boolean;
 
     // Premium settings
     autoPublishOnSave: boolean;
@@ -81,6 +88,10 @@ export const DEFAULT_SETTINGS: PluginSettings = {
     customFooterText: '',
     resolveWikilinks: false,
     defaultTargetFormat: 'google-docs',
+    resolveEmbeds: false,
+    renderMermaid: false,
+    handleFootnotes: false,
+    autoNumberFigures: false,
 
     // Premium settings
     autoPublishOnSave: false,
@@ -120,6 +131,10 @@ export interface ConvertOptions {
     headerText?: string;       // custom header text above title
     footerText?: string;       // custom footer text at document end
     targetFormat: TargetFormat; // target platform for output formatting
+    resolveEmbeds: boolean;    // inline ![[note]] transclusions before rendering
+    renderMermaid: boolean;    // render ```mermaid blocks to PNG images
+    handleFootnotes: boolean;  // extract [^id] footnotes and render as endnotes
+    autoNumberFigures: boolean; // auto-number figures and tables
 }
 
 export const DEFAULT_CONVERT_OPTIONS: ConvertOptions = {
@@ -127,6 +142,10 @@ export const DEFAULT_CONVERT_OPTIONS: ConvertOptions = {
     theme: 'default',
     includeToc: false,
     targetFormat: 'google-docs',
+    resolveEmbeds: false,
+    renderMermaid: false,
+    handleFootnotes: false,
+    autoNumberFigures: false,
 };
 
 // ---- Conversion Types ----

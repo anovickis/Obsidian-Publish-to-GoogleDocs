@@ -171,6 +171,10 @@ export async function publishNote(
             headerText: plugin.settings.customHeaderText || undefined,
             footerText: plugin.settings.customFooterText || undefined,
             targetFormat: 'google-docs' as const,
+            resolveEmbeds: plugin.settings.resolveEmbeds,
+            renderMermaid: plugin.settings.renderMermaid,
+            handleFootnotes: plugin.settings.handleFootnotes,
+            autoNumberFigures: plugin.settings.autoNumberFigures,
         };
 
         const html = await convertNoteToHtml(plugin.app, file, uploadImage, convertOptions);
@@ -267,6 +271,10 @@ async function publishForPlatform(
             headerText: plugin.settings.customHeaderText || undefined,
             footerText: plugin.settings.customFooterText || undefined,
             targetFormat,
+            resolveEmbeds: plugin.settings.resolveEmbeds,
+            renderMermaid: plugin.settings.renderMermaid,
+            handleFootnotes: plugin.settings.handleFootnotes,
+            autoNumberFigures: plugin.settings.autoNumberFigures,
         };
 
         const html = await convertNoteToHtml(plugin.app, file, null, convertOptions);

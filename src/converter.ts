@@ -21,6 +21,10 @@ import { ConvertOptions, DEFAULT_CONVERT_OPTIONS, TargetFormat } from './types';
 import { getTheme, Theme } from './themes';
 import { addTableOfContents } from './toc';
 import { renderLatexToImage } from './math-renderer';
+import { resolveEmbeds } from './embed-resolver';
+import { isMermaidBlock, extractMermaidSource, renderMermaidToImage } from './mermaid-renderer';
+import { extractFootnotes, restoreFootnotesInHtml, FootnoteExtraction } from './footnote-handler';
+import { autoNumberFiguresAndTables } from './numbering';
 
 // ============================================================
 // Types
@@ -660,10 +664,43 @@ export async function convertNoteToHtml(
 
     // 1. Read and strip frontmatter
     const rawMarkdown = await app.vault.read(file);
-    const markdown = stripFrontmatter(rawMarkdown);
+    let markdown = stripFrontmatter(rawMarkdown);
+
+    // 1.5. Resolve ![[note]] transclusion embeds (before any extraction)
+    if (opts.resolveEmbeds) {
+        markdown = await resolveEmbeds(markdown, app, file);
+    }
+
+    // 1.7. Extract footnotes from raw markdown (before rendering)
+    let footnoteExtractions: FootnoteExtraction[] = [];
+    if (opts.handleFootnotes) {
+        const fnResult = extractFootnotes(markdown);
+        markdown = fnResult.cleaned;
+        footnoteExtractions = fnResult.footnotes;
+    }
 
     // 2. Protect code blocks from regex (temporary extraction)
     const { cleaned: noCodeMd, blocks: codeBlocks } = extractCodeBlocks(markdown);
+
+    // 2.5. Process Mermaid diagrams among extracted code blocks
+    if (opts.renderMermaid) {
+        for (let i = 0; i < codeBlocks.length; i++) {
+            const block = codeBlocks[i];
+            if (isMermaidBlock(block.original)) {
+                try {
+                    const mermaidSource = extractMermaidSource(block.original);
+                    const mermaidImg = await renderMermaidToImage(mermaidSource, app);
+                    // Replace the code block with an inline image
+                    block.original = `<img src="${mermaidImg.dataUri}" alt="Mermaid diagram" ` +
+                        `style="display:block;margin:12px auto;max-width:100%;" ` +
+                        `width="${mermaidImg.width}" height="${mermaidImg.height}">`;
+                } catch (err) {
+                    console.warn('Failed to render Mermaid diagram:', err);
+                    // Leave original code block as-is on failure
+                }
+            }
+        }
+    }
 
     // 3. Extract LaTeX math → placeholders
     const { cleaned: noMathMd, math: mathExtractions } = extractMath(noCodeMd);
@@ -672,9 +709,10 @@ export async function convertNoteToHtml(
     const { cleaned: noImgMd, images: imageExtractions } = extractImageEmbeds(noMathMd);
 
     // 5. Restore code blocks (Obsidian needs them for syntax highlighting)
+    //    Mermaid blocks are now replaced with <img> tags — Obsidian will pass them through.
     const renderMd = restoreExtractions(noImgMd, codeBlocks);
 
-    console.log(`convertNoteToHtml: extracted ${mathExtractions.length} math, ${imageExtractions.length} images`);
+    console.log(`convertNoteToHtml: extracted ${mathExtractions.length} math, ${imageExtractions.length} images, ${footnoteExtractions.length} footnotes`);
 
     // 6. Render markdown to HTML via Obsidian
     //    Math placeholders become plain text; image placeholders become plain text.
@@ -705,6 +743,16 @@ export async function convertNoteToHtml(
         html = cleanHtmlForLinkedIn(html);
     } else {
         html = cleanHtmlForGoogleDocs(html, theme);
+    }
+
+    // 9.3. Auto-number figures and tables
+    if (opts.autoNumberFigures) {
+        html = autoNumberFiguresAndTables(html);
+    }
+
+    // 9.5. Restore footnotes as endnotes section
+    if (opts.handleFootnotes && footnoteExtractions.length > 0) {
+        html = restoreFootnotesInHtml(html, footnoteExtractions);
     }
 
     // 10. Add table of contents if requested

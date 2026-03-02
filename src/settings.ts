@@ -384,6 +384,82 @@ export class PublishSettingTab extends PluginSettingTab {
             formatSetting.setDisabled(true);
             formatSetting.descEl.textContent += ' (Pro)';
         }
+
+        // Resolve embeds
+        const embedSetting = new Setting(containerEl)
+            .setName('Resolve embeds')
+            .setDesc('Inline ![[note]] transclusions (including #section and ^block references)');
+
+        if (isPro) {
+            embedSetting.addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.resolveEmbeds)
+                    .onChange(async (value) => {
+                        this.plugin.settings.resolveEmbeds = value;
+                        await this.plugin.saveSettings();
+                    }),
+            );
+        } else {
+            embedSetting.setDisabled(true);
+            embedSetting.descEl.textContent += ' (Pro)';
+        }
+
+        // Render Mermaid diagrams
+        const mermaidSetting = new Setting(containerEl)
+            .setName('Render Mermaid diagrams')
+            .setDesc('Convert ```mermaid code blocks to PNG images in the export');
+
+        if (isPro) {
+            mermaidSetting.addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.renderMermaid)
+                    .onChange(async (value) => {
+                        this.plugin.settings.renderMermaid = value;
+                        await this.plugin.saveSettings();
+                    }),
+            );
+        } else {
+            mermaidSetting.setDisabled(true);
+            mermaidSetting.descEl.textContent += ' (Pro)';
+        }
+
+        // Handle footnotes
+        const footnoteSetting = new Setting(containerEl)
+            .setName('Handle footnotes')
+            .setDesc('Convert [^id] footnotes to numbered endnotes with a Notes section');
+
+        if (isPro) {
+            footnoteSetting.addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.handleFootnotes)
+                    .onChange(async (value) => {
+                        this.plugin.settings.handleFootnotes = value;
+                        await this.plugin.saveSettings();
+                    }),
+            );
+        } else {
+            footnoteSetting.setDisabled(true);
+            footnoteSetting.descEl.textContent += ' (Pro)';
+        }
+
+        // Auto-number figures and tables
+        const numberingSetting = new Setting(containerEl)
+            .setName('Auto-number figures & tables')
+            .setDesc('Add sequential Figure N / Table N labels to images and tables');
+
+        if (isPro) {
+            numberingSetting.addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.autoNumberFigures)
+                    .onChange(async (value) => {
+                        this.plugin.settings.autoNumberFigures = value;
+                        await this.plugin.saveSettings();
+                    }),
+            );
+        } else {
+            numberingSetting.setDisabled(true);
+            numberingSetting.descEl.textContent += ' (Pro)';
+        }
     }
 
     // ---- Section 6: Advanced (Premium) ----
