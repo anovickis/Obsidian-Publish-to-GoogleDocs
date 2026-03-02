@@ -356,30 +356,77 @@ function tokensToHtml(tokens: Token[]): string {
 }
 
 /**
- * Add syntax highlighting to code blocks in the HTML output.
+ * Highlight a raw markdown fenced code block and return it as HTML.
  *
- * Finds `<pre><code class="language-xxx">` blocks, tokenizes the code,
- * and replaces the content with colored spans using inline styles.
+ * Takes the full fence including backticks, e.g.:
+ *   ```python\ndef foo():\n    pass\n```
  *
- * @param html - HTML containing code blocks
- * @returns HTML with syntax-highlighted code blocks
+ * Returns `<pre><code class="language-xxx">...highlighted...</code></pre>`
+ * or null if the language is unknown or the fence has no language.
+ */
+export function highlightFencedBlock(fence: string): string | null {
+    // Parse language and code from the fence manually (handles \r\n and edge cases)
+    const firstNewline = fence.indexOf('\n');
+    if (firstNewline === -1) return null;
+
+    const openingLine = fence.substring(0, firstNewline).replace(/\r$/, '').trim();
+    if (!openingLine.startsWith('```')) return null;
+
+    const langRaw = openingLine.substring(3).trim();
+    if (!langRaw || !/^\w+$/.test(langRaw)) return null;
+
+    // Find closing ``` — must be at the end
+    const closingIdx = fence.lastIndexOf('```');
+    if (closingIdx <= firstNewline) return null;
+
+    // Extract code between opening fence line and closing ```
+    let code = fence.substring(firstNewline + 1, closingIdx);
+    // Strip trailing newline(s) before closing fence
+    code = code.replace(/\r?\n$/, '');
+
+    const normalizedLang = langRaw.toLowerCase();
+    const langKey = LANG_ALIASES[normalizedLang] || normalizedLang;
+    const langDef = LANGUAGES[langKey];
+
+    if (!langDef) {
+        console.log(`[syntax-highlight] Unknown language: ${langRaw}`);
+        return null;
+    }
+
+    const tokens = tokenize(code, langDef);
+    const highlighted = tokensToHtml(tokens);
+
+    console.log(`[syntax-highlight] Highlighted ${langRaw} block (${code.length} chars, ${tokens.length} tokens)`);
+
+    // Use a <table> wrapper because Google Docs strips inline styles from
+    // <span> elements inside <pre> and <div> blocks, but preserves them inside
+    // table cells (confirmed working — same pattern as callouts).
+    // Replace spaces with &nbsp; to preserve indentation (HTML collapses spaces).
+    // Only replace spaces in text content, not inside HTML tags.
+    const preserved = highlighted
+        .replace(/(<[^>]*>)|( )/g, (_, tag, space) => tag ? tag : '&nbsp;')
+        .split('\n').join('<br>');
+    return `<table style="border:none;border-collapse:collapse;background:#f5f5f5;width:100%;margin:12px 0;"><tr><td style="padding:12px 16px;font-family:'Courier New',Courier,monospace;font-size:13px;line-height:1.5;border:none;">${preserved}</td></tr></table>`;
+}
+
+/**
+ * Add syntax highlighting to code blocks in the HTML output (fallback).
+ * Kept for compatibility but the preferred path is highlightFencedBlock
+ * applied during the extraction phase before Obsidian renders.
  */
 export function highlightCodeBlocks(html: string): string {
-    // Match <pre...><code class="language-xxx">...</code></pre>
     return html.replace(
-        /<pre([^>]*)><code\s+class="language-(\w+)"[^>]*>([\s\S]*?)<\/code><\/pre>/gi,
-        (match, preAttrs: string, langId: string, codeHtml: string) => {
-            // Resolve language alias
+        /<pre([^>]*)>\s*<code([^>]*)>([\s\S]*?)<\/code>\s*<\/pre>/gi,
+        (match, preAttrs: string, codeAttrs: string, codeHtml: string) => {
+            const langMatch = codeAttrs.match(/language-(\w+)/) || preAttrs.match(/language-(\w+)/);
+            if (!langMatch) return match;
+
+            const langId = langMatch[1];
             const normalizedLang = langId.toLowerCase();
             const langKey = LANG_ALIASES[normalizedLang] || normalizedLang;
             const langDef = LANGUAGES[langKey];
+            if (!langDef) return match;
 
-            if (!langDef) {
-                // Unknown language — return as-is
-                return match;
-            }
-
-            // Decode HTML entities in the code (Obsidian renderer escapes them)
             const rawCode = codeHtml
                 .replace(/&amp;/g, '&')
                 .replace(/&lt;/g, '<')
@@ -387,7 +434,6 @@ export function highlightCodeBlocks(html: string): string {
                 .replace(/&quot;/g, '"')
                 .replace(/&#39;/g, "'");
 
-            // Tokenize and colorize
             const tokens = tokenize(rawCode, langDef);
             const highlighted = tokensToHtml(tokens);
 

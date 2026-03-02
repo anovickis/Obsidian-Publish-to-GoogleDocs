@@ -43,10 +43,17 @@ const FEATURE_TIER: Record<Feature, number> = {
     'auto-numbering': 1,
     'platform-export': 1,
     'syntax-highlight': 1,
+    'citations': 1,
+    'cross-refs': 1,
+    'project-compile': 1,
+    'journal-templates': 1,
+    'image-optimize': 1,
+    'watermark': 1,
     'true-update': 2,
     'auto-publish': 2,
     'history': 2,
     'team': 2,
+    'comment-import': 2,
 };
 
 // How often to re-validate (ms)

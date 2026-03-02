@@ -6,13 +6,12 @@
 // (Medium, LinkedIn) and fixes the broken plaintext fallback in DOCX export.
 
 import { renderMath, finishRenderMath } from 'obsidian';
-import { rasterizeSvgToPng } from './converter';
 
 // ---- Types ----
 
 export interface MathImage {
-    data: ArrayBuffer;   // raw PNG bytes
-    dataUri: string;     // data:image/png;base64,...
+    data: ArrayBuffer;   // raw SVG bytes
+    dataUri: string;     // data:image/svg+xml;base64,...
     width: number;       // CSS pixel width
     height: number;      // CSS pixel height
 }
@@ -20,13 +19,16 @@ export interface MathImage {
 // ---- Core Rendering ----
 
 /**
- * Render a single LaTeX expression to a PNG image.
+ * Render a single LaTeX expression to an SVG image.
  *
- * Pipeline: LaTeX → Obsidian renderMath → MathJax SVG → rasterizeSvgToPng → PNG
+ * Pipeline: LaTeX → Obsidian renderMath → MathJax SVG → data URI
+ *
+ * Uses SVG directly (no PNG rasterization) because Google Docs supports
+ * SVG in HTML import and it preserves vector quality.
  *
  * @param latex - The LaTeX source (without $ delimiters)
  * @param isDisplay - true for display math (centered block), false for inline
- * @returns PNG image data, data URI, and dimensions
+ * @returns SVG image data, data URI, and dimensions
  */
 export async function renderLatexToImage(
     latex: string,
@@ -57,7 +59,6 @@ export async function renderLatexToImage(
         }
 
         // 5. Ensure proper SVG attributes for standalone rendering
-        //    MathJax SVGs may use 'ex' units — convert to px for rasterization
         const svgClone = svgEl.cloneNode(true) as SVGSVGElement;
 
         // Get computed dimensions from the laid-out element
@@ -77,18 +78,13 @@ export async function renderLatexToImage(
             svgClone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
         }
 
-        // 6. Serialize SVG to string
+        // 6. Serialize SVG to string and build data URI directly
         const serializer = new XMLSerializer();
         const svgString = serializer.serializeToString(svgClone);
-
-        // 7. Rasterize to PNG using the existing canvas pipeline
         const svgData = new TextEncoder().encode(svgString).buffer;
-        const pngData = await rasterizeSvgToPng(svgData);
+        const dataUri = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svgString)))}`;
 
-        // 8. Build base64 data URI
-        const dataUri = arrayBufferToDataUri(pngData);
-
-        return { data: pngData, dataUri, width, height };
+        return { data: svgData, dataUri, width, height };
 
     } finally {
         document.body.removeChild(container);
@@ -151,13 +147,3 @@ function renderLatexFallback(latex: string, isDisplay: boolean): MathImage {
     return { data, dataUri, width, height };
 }
 
-// ---- Utilities ----
-
-function arrayBufferToDataUri(buffer: ArrayBuffer): string {
-    const bytes = new Uint8Array(buffer);
-    let binary = '';
-    for (let i = 0; i < bytes.length; i++) {
-        binary += String.fromCharCode(bytes[i]);
-    }
-    return `data:image/png;base64,${btoa(binary)}`;
-}

@@ -12,7 +12,7 @@
 import { App, Notice, PluginSettingTab, Setting } from 'obsidian';
 import type PublishToGoogleDocsPlugin from './main';
 import { authenticate } from './auth';
-import { ThemeName, TargetFormat } from './types';
+import { ThemeName, TargetFormat, CitationStyle, JournalTemplateName } from './types';
 import {
     activateLicense,
     deactivateLicense,
@@ -21,6 +21,7 @@ import {
 } from './license';
 import { getThemeOptions } from './themes';
 import { loadHistory, clearHistory, formatEvent, PublishEvent } from './history';
+import { getJournalTemplateOptions } from './journal-templates';
 
 export class PublishSettingTab extends PluginSettingTab {
     plugin: PublishToGoogleDocsPlugin;
@@ -524,6 +525,230 @@ export class PublishSettingTab extends PluginSettingTab {
             cssSetting.setDisabled(true);
             cssSetting.descEl.textContent += ' (Pro)';
         }
+
+        // ---- Citations & Bibliography ----
+        containerEl.createEl('h4', { text: 'Citations & Bibliography' });
+
+        // BibTeX file path
+        const bibSetting = new Setting(containerEl)
+            .setName('BibTeX file')
+            .setDesc('Vault-relative path to your .bib file (e.g., references.bib)');
+
+        if (isPro) {
+            bibSetting.addText((text) =>
+                text
+                    .setPlaceholder('path/to/references.bib')
+                    .setValue(this.plugin.settings.bibFilePath)
+                    .onChange(async (value) => {
+                        this.plugin.settings.bibFilePath = value.trim();
+                        await this.plugin.saveSettings();
+                    }),
+            );
+        } else {
+            bibSetting.setDisabled(true);
+            bibSetting.descEl.textContent += ' (Pro)';
+        }
+
+        // Citation style
+        const citStyleSetting = new Setting(containerEl)
+            .setName('Citation style')
+            .setDesc('How [@citekey] citations are formatted in the output');
+
+        if (isPro) {
+            citStyleSetting.addDropdown((dropdown) => {
+                dropdown.addOption('numbered', 'Numbered — [1], [2]');
+                dropdown.addOption('author-year', 'Author-Year — Smith (2024)');
+                dropdown.addOption('author-year-paren', 'Author-Year (parenthetical) — (Smith, 2024)');
+                dropdown.setValue(this.plugin.settings.citationStyle);
+                dropdown.onChange(async (value) => {
+                    this.plugin.settings.citationStyle = value as CitationStyle;
+                    await this.plugin.saveSettings();
+                });
+            });
+        } else {
+            citStyleSetting.setDisabled(true);
+            citStyleSetting.descEl.textContent += ' (Pro)';
+        }
+
+        // Cross-references
+        const xrefSetting = new Setting(containerEl)
+            .setName('Resolve cross-references')
+            .setDesc('Convert @fig:label, @tab:label, @eq:label to numbered links (requires auto-numbering)');
+
+        if (isPro) {
+            xrefSetting.addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.resolveCrossRefs)
+                    .onChange(async (value) => {
+                        this.plugin.settings.resolveCrossRefs = value;
+                        await this.plugin.saveSettings();
+                    }),
+            );
+        } else {
+            xrefSetting.setDisabled(true);
+            xrefSetting.descEl.textContent += ' (Pro)';
+        }
+
+        // ---- Math Rendering ----
+        containerEl.createEl('h4', { text: 'Math Rendering' });
+
+        // Math as images (free tier)
+        new Setting(containerEl)
+            .setName('Render math as images')
+            .setDesc('Render LaTeX equations as PNG images instead of text delimiters (eliminates need for Auto-LaTeX Equations add-on)')
+            .addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.mathAsImages)
+                    .onChange(async (value) => {
+                        this.plugin.settings.mathAsImages = value;
+                        await this.plugin.saveSettings();
+                    }),
+            );
+
+        // ---- Journal Templates ----
+        containerEl.createEl('h4', { text: 'Journal Templates' });
+
+        const journalSetting = new Setting(containerEl)
+            .setName('Journal template')
+            .setDesc('Apply academic journal formatting (overrides some theme settings)');
+
+        if (isPro) {
+            journalSetting.addDropdown((dropdown) => {
+                const options = getJournalTemplateOptions();
+                for (const opt of options) {
+                    dropdown.addOption(opt.value, `${opt.label} — ${opt.description}`);
+                }
+                dropdown.setValue(this.plugin.settings.journalTemplate);
+                dropdown.onChange(async (value) => {
+                    this.plugin.settings.journalTemplate = value as JournalTemplateName;
+                    await this.plugin.saveSettings();
+                });
+            });
+        } else {
+            journalSetting.setDisabled(true);
+            journalSetting.descEl.textContent += ' (Pro)';
+        }
+
+        // ---- Image Optimization ----
+        containerEl.createEl('h4', { text: 'Image Optimization' });
+
+        const imgOptSetting = new Setting(containerEl)
+            .setName('Optimize images')
+            .setDesc('Compress and resize images before upload to reduce file size');
+
+        if (isPro) {
+            imgOptSetting.addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.optimizeImages)
+                    .onChange(async (value) => {
+                        this.plugin.settings.optimizeImages = value;
+                        await this.plugin.saveSettings();
+                    }),
+            );
+        } else {
+            imgOptSetting.setDisabled(true);
+            imgOptSetting.descEl.textContent += ' (Pro)';
+        }
+
+        const maxWidthSetting = new Setting(containerEl)
+            .setName('Max image width (px)')
+            .setDesc('Images wider than this are scaled down proportionally');
+
+        if (isPro) {
+            maxWidthSetting.addText((text) => {
+                text
+                    .setPlaceholder('1200')
+                    .setValue(String(this.plugin.settings.maxImageWidth))
+                    .onChange(async (value) => {
+                        const num = parseInt(value, 10);
+                        if (!isNaN(num) && num > 0) {
+                            this.plugin.settings.maxImageWidth = num;
+                            await this.plugin.saveSettings();
+                        }
+                    });
+                text.inputEl.type = 'number';
+                text.inputEl.style.width = '80px';
+            });
+        } else {
+            maxWidthSetting.setDisabled(true);
+            maxWidthSetting.descEl.textContent += ' (Pro)';
+        }
+
+        const qualitySetting = new Setting(containerEl)
+            .setName('JPEG quality')
+            .setDesc('Compression quality for JPEG images (0.1 = smallest, 1.0 = best quality)');
+
+        if (isPro) {
+            qualitySetting.addText((text) => {
+                text
+                    .setPlaceholder('0.85')
+                    .setValue(String(this.plugin.settings.imageQuality))
+                    .onChange(async (value) => {
+                        const num = parseFloat(value);
+                        if (!isNaN(num) && num >= 0.1 && num <= 1.0) {
+                            this.plugin.settings.imageQuality = num;
+                            await this.plugin.saveSettings();
+                        }
+                    });
+                text.inputEl.type = 'number';
+                text.inputEl.step = '0.05';
+                text.inputEl.min = '0.1';
+                text.inputEl.max = '1.0';
+                text.inputEl.style.width = '80px';
+            });
+        } else {
+            qualitySetting.setDisabled(true);
+            qualitySetting.descEl.textContent += ' (Pro)';
+        }
+
+        // ---- Watermark ----
+        containerEl.createEl('h4', { text: 'Watermark' });
+
+        const watermarkSetting = new Setting(containerEl)
+            .setName('Watermark text')
+            .setDesc('Diagonal text overlay on exports (e.g., DRAFT, CONFIDENTIAL). Leave empty to disable.');
+
+        if (isPro) {
+            watermarkSetting.addText((text) =>
+                text
+                    .setPlaceholder('e.g., DRAFT')
+                    .setValue(this.plugin.settings.watermarkText)
+                    .onChange(async (value) => {
+                        this.plugin.settings.watermarkText = value;
+                        await this.plugin.saveSettings();
+                    }),
+            );
+        } else {
+            watermarkSetting.setDisabled(true);
+            watermarkSetting.descEl.textContent += ' (Pro)';
+        }
+
+        const opacitySetting = new Setting(containerEl)
+            .setName('Watermark opacity')
+            .setDesc('Transparency of the watermark (0.01 = barely visible, 0.2 = prominent)');
+
+        if (isPro) {
+            opacitySetting.addText((text) => {
+                text
+                    .setPlaceholder('0.06')
+                    .setValue(String(this.plugin.settings.watermarkOpacity))
+                    .onChange(async (value) => {
+                        const num = parseFloat(value);
+                        if (!isNaN(num) && num >= 0.01 && num <= 0.2) {
+                            this.plugin.settings.watermarkOpacity = num;
+                            await this.plugin.saveSettings();
+                        }
+                    });
+                text.inputEl.type = 'number';
+                text.inputEl.step = '0.01';
+                text.inputEl.min = '0.01';
+                text.inputEl.max = '0.2';
+                text.inputEl.style.width = '80px';
+            });
+        } else {
+            opacitySetting.setDisabled(true);
+            opacitySetting.descEl.textContent += ' (Pro)';
+        }
     }
 
     // ---- Section 6: Advanced (Premium) ----
@@ -555,6 +780,27 @@ export class PublishSettingTab extends PluginSettingTab {
         } else {
             autoSetting.setDisabled(true);
             autoSetting.descEl.textContent += ' (Premium)';
+        }
+
+        // Comment import filter
+        const commentSetting = new Setting(containerEl)
+            .setName('Comment import filter')
+            .setDesc('Which Google Docs comments to import when using "Import Comments"');
+
+        if (isPremium) {
+            commentSetting.addDropdown((dropdown) => {
+                dropdown.addOption('unresolved', 'Unresolved only');
+                dropdown.addOption('all', 'All comments');
+                dropdown.addOption('resolved', 'Resolved only');
+                dropdown.setValue(this.plugin.settings.commentFilter);
+                dropdown.onChange(async (value) => {
+                    this.plugin.settings.commentFilter = value as 'all' | 'unresolved' | 'resolved';
+                    await this.plugin.saveSettings();
+                });
+            });
+        } else {
+            commentSetting.setDisabled(true);
+            commentSetting.descEl.textContent += ' (Premium)';
         }
     }
 

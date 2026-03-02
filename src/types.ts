@@ -21,11 +21,24 @@ export type Feature =
     | 'auto-publish'
     | 'history'
     | 'team'
-    | 'platform-export';
+    | 'platform-export'
+    | 'citations'
+    | 'cross-refs'
+    | 'project-compile'
+    | 'comment-import'
+    | 'journal-templates'
+    | 'image-optimize'
+    | 'watermark';
 
 export type TargetFormat = 'google-docs' | 'medium' | 'linkedin';
 
 export type ThemeName = 'default' | 'academic' | 'business' | 'minimal' | 'colorful';
+
+export type CitationStyle = 'numbered' | 'author-year' | 'author-year-paren';
+
+export type JournalTemplateName = 'none' | 'ieee' | 'apa' | 'nature' | 'arxiv' | 'academic';
+
+export type CommentFilter = 'all' | 'unresolved' | 'resolved';
 
 // ---- Plugin Settings ----
 
@@ -60,8 +73,29 @@ export interface PluginSettings {
     syntaxHighlighting: boolean;
     customCss: string;
 
+    // Citations & references
+    citationStyle: CitationStyle;
+    bibFilePath: string;           // vault-relative path to .bib file
+    resolveCrossRefs: boolean;
+
+    // Math rendering
+    mathAsImages: boolean;         // render LaTeX as images for Google Docs (no Auto-LaTeX needed)
+
+    // Journal templates
+    journalTemplate: JournalTemplateName;
+
+    // Image optimization
+    optimizeImages: boolean;
+    maxImageWidth: number;         // max width in pixels before resize
+    imageQuality: number;          // JPEG quality 0.1–1.0
+
+    // Watermark
+    watermarkText: string;
+    watermarkOpacity: number;      // 0.01–0.2
+
     // Premium settings
     autoPublishOnSave: boolean;
+    commentFilter: CommentFilter;  // filter for comment import
 
     // Internal
     lastShownVersion: string;  // for "What's New" modal
@@ -98,8 +132,29 @@ export const DEFAULT_SETTINGS: PluginSettings = {
     syntaxHighlighting: false,
     customCss: '',
 
+    // Citations & references
+    citationStyle: 'numbered',
+    bibFilePath: '',
+    resolveCrossRefs: false,
+
+    // Math rendering
+    mathAsImages: false,
+
+    // Journal templates
+    journalTemplate: 'none',
+
+    // Image optimization
+    optimizeImages: false,
+    maxImageWidth: 1200,
+    imageQuality: 0.85,
+
+    // Watermark
+    watermarkText: '',
+    watermarkOpacity: 0.06,
+
     // Premium settings
     autoPublishOnSave: false,
+    commentFilter: 'unresolved',
 
     // Internal
     lastShownVersion: '',
@@ -143,6 +198,21 @@ export interface ConvertOptions {
     resolveWikilinks: boolean; // resolve [[links]] to Google Doc hyperlinks
     syntaxHighlighting: boolean; // add colored syntax highlighting to code blocks
     customCss?: string;        // custom CSS injected into the HTML document
+    // Citations & references
+    citationStyle: CitationStyle;  // citation formatting style
+    bibFilePath: string;       // vault-relative path to .bib file
+    resolveCrossRefs: boolean; // resolve @fig:/@tab:/@eq: references
+    // Math rendering
+    mathAsImages: boolean;     // render LaTeX as images (even for Google Docs)
+    // Journal templates
+    journalTemplate: JournalTemplateName; // journal formatting preset
+    // Image optimization
+    optimizeImages: boolean;   // compress/resize images before upload
+    maxImageWidth: number;     // max width in pixels
+    imageQuality: number;      // JPEG quality 0.1–1.0
+    // Watermark
+    watermarkText: string;     // diagonal watermark text (empty = none)
+    watermarkOpacity: number;  // watermark opacity
 }
 
 export const DEFAULT_CONVERT_OPTIONS: ConvertOptions = {
@@ -156,6 +226,16 @@ export const DEFAULT_CONVERT_OPTIONS: ConvertOptions = {
     autoNumberFigures: false,
     resolveWikilinks: false,
     syntaxHighlighting: false,
+    citationStyle: 'numbered',
+    bibFilePath: '',
+    resolveCrossRefs: false,
+    mathAsImages: false,
+    journalTemplate: 'none',
+    optimizeImages: false,
+    maxImageWidth: 1200,
+    imageQuality: 0.85,
+    watermarkText: '',
+    watermarkOpacity: 0.06,
 };
 
 // ---- Conversion Types ----

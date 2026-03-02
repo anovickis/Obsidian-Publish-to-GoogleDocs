@@ -26,7 +26,12 @@ import { isMermaidBlock, extractMermaidSource, renderMermaidToImage } from './me
 import { extractFootnotes, restoreFootnotesInHtml, FootnoteExtraction } from './footnote-handler';
 import { autoNumberFiguresAndTables } from './numbering';
 import { resolveWikilinksInHtml } from './wikilink-resolver';
-import { highlightCodeBlocks } from './syntax-highlighter';
+import { highlightCodeBlocks, highlightFencedBlock } from './syntax-highlighter';
+import { loadBibFile, processCitations, CitationResult } from './citation-processor';
+import { extractLabelMarkers, resolveReferences, RefRegistry } from './cross-references';
+import { optimizeImage } from './image-optimizer';
+import { applyWatermark } from './watermark';
+import { getJournalTemplateCss, getTemplateCitationStyle } from './journal-templates';
 
 // ============================================================
 // Types
@@ -203,9 +208,9 @@ function restoreMathInHtml(
         const latexHtml = escapeHtml(m.latex);
         let restored: string;
         if (targetFormat === 'google-docs') {
-            // Use $...$ and $$...$$ for the Auto-LaTeX Equations add-on.
-            // These are the primary delimiters that Auto-LaTeX reliably recognizes.
-            restored = m.isDisplay ? `$$${latexHtml}$$` : `$${latexHtml}$`;
+            // Use $$...$$ for both inline and display math.
+            // Auto-LaTeX Equations add-on only reliably recognizes $$ delimiters.
+            restored = `$$${latexHtml}$$`;
         } else {
             // For DOCX/local export: keep \(...\) and \[...\] which the
             // docx-builder parses to render math as images.
@@ -232,7 +237,7 @@ async function restoreMathAsImages(
             const style = m.isDisplay
                 ? 'display:block;margin:12px auto;'
                 : 'display:inline;vertical-align:middle;height:1.2em;';
-            const tag = `<img src="${img.dataUri}" alt="${altText}" style="${style}">`;
+            const tag = `<img src="${img.dataUri}" alt="${altText}" style="${style}" width="${img.width}" height="${img.height}">`;
             result = result.split(m.placeholder).join(tag);
         } catch (err) {
             console.warn(`Failed to render LaTeX as image: ${m.latex}`, err);
@@ -255,6 +260,7 @@ async function processAndRestoreImages(
     file: TFile,
     uploadImageFn: ((data: ArrayBuffer, name: string, mimeType: string) => Promise<string>) | null,
     imageMode: 'upload' | 'embed' = 'upload',
+    imageOptimization?: { enabled: boolean; maxWidth: number; quality: number },
 ): Promise<string> {
     let result = html;
 
@@ -285,6 +291,23 @@ async function processAndRestoreImages(
                     }
 
                     if (mimeType === 'image/jpg') mimeType = 'image/jpeg';
+
+                    // Image optimization (resize/compress)
+                    if (imageOptimization?.enabled && !img.isSvg) {
+                        try {
+                            const optimized = await optimizeImage(imageData, mimeType, {
+                                maxWidth: imageOptimization.maxWidth,
+                                quality: imageOptimization.quality,
+                            });
+                            imageData = optimized.data;
+                            mimeType = optimized.mimeType;
+                            if (mimeType === 'image/jpeg' && !fileName.match(/\.jpe?g$/i)) {
+                                fileName = fileName.replace(/\.\w+$/, '.jpg');
+                            }
+                        } catch (optErr) {
+                            console.warn(`Image optimization failed for ${img.vaultPath}, using original:`, optErr);
+                        }
+                    }
 
                     let src: string;
                     if (imageMode === 'embed') {
@@ -439,16 +462,16 @@ function cleanHtmlForGoogleDocs(html: string, theme?: Theme): string {
     let result = html;
 
     // Convert callout divs to styled tables
+    // Obsidian callout HTML: <div data-callout="type" class="callout">
+    //   <div class="callout-title"><div class="callout-icon">…</div><div class="callout-title-inner">Title</div></div>
+    //   <div class="callout-content"><p>Content</p></div>
+    // </div>
     result = result.replace(
-        /<div[^>]*data-callout="([^"]*)"[^>]*class="[^"]*callout[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/gi,
-        (_, type, content) => {
+        /<div[^>]*data-callout="([^"]*)"[^>]*>[\s\S]*?<div[^>]*callout-title-inner[^>]*>([\s\S]*?)<\/div>[\s\S]*?<div[^>]*callout-content[^>]*>([\s\S]*?)<\/div>\s*<\/div>/gi,
+        (_, type, title, content) => {
             const color = CALLOUT_COLORS[type.toLowerCase()] || '#448aff';
-            const cleanContent = content
-                .replace(/<div[^>]*class="[^"]*callout-title[^"]*"[^>]*>/gi, '<b>')
-                .replace(/<div[^>]*class="[^"]*callout-content[^"]*"[^>]*>/gi, '')
-                .replace(/<\/div>/gi, '</b><br/>');
             return `<table style="border-left:4px solid ${color};background:${t.calloutBackground};width:100%;margin:12px 0;">
-                <tr><td style="padding:12px;">${cleanContent}</td></tr></table>`;
+                <tr><td style="padding:12px;"><b>${title.trim()}</b><br/>${content.trim()}</td></tr></table>`;
         },
     );
 
@@ -516,13 +539,9 @@ function cleanHtmlForMedium(html: string): string {
 
     // Convert callout divs to blockquotes (Medium doesn't support callouts)
     result = result.replace(
-        /<div[^>]*data-callout="([^"]*)"[^>]*class="[^"]*callout[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/gi,
-        (_, _type, content) => {
-            const cleanContent = content
-                .replace(/<div[^>]*class="[^"]*callout-title[^"]*"[^>]*>/gi, '<b>')
-                .replace(/<div[^>]*class="[^"]*callout-content[^"]*"[^>]*>/gi, '')
-                .replace(/<\/div>/gi, '</b><br/>');
-            return `<blockquote>${cleanContent}</blockquote>`;
+        /<div[^>]*data-callout="([^"]*)"[^>]*>[\s\S]*?<div[^>]*callout-title-inner[^>]*>([\s\S]*?)<\/div>[\s\S]*?<div[^>]*callout-content[^>]*>([\s\S]*?)<\/div>\s*<\/div>/gi,
+        (_, _type, title, content) => {
+            return `<blockquote><b>${title.trim()}</b><br/>${content.trim()}</blockquote>`;
         },
     );
 
@@ -583,13 +602,9 @@ function cleanHtmlForLinkedIn(html: string): string {
 
     // Convert callout divs to blockquotes
     result = result.replace(
-        /<div[^>]*data-callout="([^"]*)"[^>]*class="[^"]*callout[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/gi,
-        (_, _type, content) => {
-            const cleanContent = content
-                .replace(/<div[^>]*class="[^"]*callout-title[^"]*"[^>]*>/gi, '<b>')
-                .replace(/<div[^>]*class="[^"]*callout-content[^"]*"[^>]*>/gi, '')
-                .replace(/<\/div>/gi, '</b><br/>');
-            return `<blockquote>${cleanContent}</blockquote>`;
+        /<div[^>]*data-callout="([^"]*)"[^>]*>[\s\S]*?<div[^>]*callout-title-inner[^>]*>([\s\S]*?)<\/div>[\s\S]*?<div[^>]*callout-content[^>]*>([\s\S]*?)<\/div>\s*<\/div>/gi,
+        (_, _type, title, content) => {
+            return `<blockquote><b>${title.trim()}</b><br/>${content.trim()}</blockquote>`;
         },
     );
 
@@ -660,17 +675,62 @@ export async function convertNoteToHtml(
     file: TFile,
     uploadImageFn: ((data: ArrayBuffer, name: string, mimeType: string) => Promise<string>) | null,
     options?: Partial<ConvertOptions>,
+    markdownOverride?: string,
 ): Promise<string> {
     const opts: ConvertOptions = { ...DEFAULT_CONVERT_OPTIONS, ...options };
     const theme = getTheme(opts.theme);
 
-    // 1. Read and strip frontmatter
-    const rawMarkdown = await app.vault.read(file);
-    let markdown = stripFrontmatter(rawMarkdown);
+    // Determine effective citation style (journal template may override)
+    const templateCitStyle = getTemplateCitationStyle(opts.journalTemplate);
+    const effectiveCitationStyle = templateCitStyle || opts.citationStyle;
+
+    // 1. Read and strip frontmatter (or use markdownOverride for project compilation)
+    let markdown: string;
+    if (markdownOverride !== undefined) {
+        markdown = markdownOverride;
+    } else {
+        const rawMarkdown = await app.vault.read(file);
+        markdown = stripFrontmatter(rawMarkdown);
+    }
 
     // 1.5. Resolve ![[note]] transclusion embeds (before any extraction)
     if (opts.resolveEmbeds) {
         markdown = await resolveEmbeds(markdown, app, file);
+    }
+
+    // 1.6. Process citations from .bib file (before rendering)
+    // Priority: explicit bibFilePath setting > .bib file in same folder as source .md
+    let citationResult: CitationResult | null = null;
+    let effectiveBibPath = opts.bibFilePath || '';
+    if (!effectiveBibPath) {
+        // Auto-discover: look for .bib files in the same folder as the source file
+        const sourceFolder = file.parent;
+        if (sourceFolder) {
+            const bibFile = sourceFolder.children.find(
+                (f): f is TFile => f instanceof TFile && f.extension === 'bib',
+            );
+            if (bibFile) {
+                effectiveBibPath = bibFile.path;
+                console.log(`Auto-discovered .bib file: ${effectiveBibPath}`);
+            }
+        }
+    }
+    if (effectiveBibPath) {
+        try {
+            const bibEntries = await loadBibFile(app, effectiveBibPath);
+            if (bibEntries.size > 0) {
+                citationResult = processCitations(markdown, bibEntries, effectiveCitationStyle);
+                markdown = citationResult.processed;
+            }
+        } catch (err) {
+            console.warn('Citation processing failed:', err);
+        }
+    }
+
+    // 1.65. Extract cross-reference label markers (before rendering)
+    if (opts.resolveCrossRefs) {
+        const labelResult = extractLabelMarkers(markdown);
+        markdown = labelResult.cleaned;
     }
 
     // 1.7. Extract footnotes from raw markdown (before rendering)
@@ -704,6 +764,25 @@ export async function convertNoteToHtml(
         }
     }
 
+    // 2.7. Pre-highlight code blocks (before Obsidian renders)
+    //      Converts fenced code blocks to <pre><code> HTML with inline color spans.
+    //      Obsidian's MarkdownRenderer passes raw HTML through, so these survive rendering.
+    if (opts.syntaxHighlighting) {
+        console.log(`[converter] Step 2.7: Syntax highlighting ${codeBlocks.length} code blocks`);
+        for (const block of codeBlocks) {
+            // Only fenced code blocks (GDOCS_CB), not inline code (GDOCS_CI)
+            if (!block.placeholder.startsWith('GDOCS_CB')) continue;
+            console.log(`[converter] Processing block: ${block.placeholder}, original starts with: ${block.original.substring(0, 40)}`);
+            const highlighted = highlightFencedBlock(block.original);
+            if (highlighted) {
+                block.original = highlighted;
+                console.log(`[converter] Highlighted ${block.placeholder} successfully`);
+            } else {
+                console.log(`[converter] Could not highlight ${block.placeholder}`);
+            }
+        }
+    }
+
     // 3. Extract LaTeX math → placeholders
     const { cleaned: noMathMd, math: mathExtractions } = extractMath(noCodeMd);
 
@@ -726,14 +805,9 @@ export async function convertNoteToHtml(
         html = resolveWikilinksInHtml(html, app, file);
     }
 
-    // 6.7. Apply syntax highlighting to code blocks (before cleanup strips classes)
-    if (opts.syntaxHighlighting) {
-        html = highlightCodeBlocks(html);
-    }
-
     // 7. Restore LaTeX based on target format
-    if (opts.targetFormat === 'medium' || opts.targetFormat === 'linkedin') {
-        // Render math as inline PNG images (these platforms don't support LaTeX)
+    if (opts.targetFormat === 'medium' || opts.targetFormat === 'linkedin' || opts.mathAsImages) {
+        // Render ALL math as inline PNG images (platforms without LaTeX, or user preference)
         html = await restoreMathAsImages(html, mathExtractions);
     } else {
         // Google Docs / DOCX: restore as text delimiters
@@ -746,6 +820,11 @@ export async function convertNoteToHtml(
         ? 'embed' : opts.imageMode;
     html = await processAndRestoreImages(
         html, imageExtractions, app, file, uploadImageFn, effectiveImageMode,
+        opts.optimizeImages ? {
+            enabled: true,
+            maxWidth: opts.maxImageWidth,
+            quality: opts.imageQuality,
+        } : undefined,
     );
 
     // 9. Clean HTML for target platform
@@ -757,9 +836,17 @@ export async function convertNoteToHtml(
         html = cleanHtmlForGoogleDocs(html, theme);
     }
 
-    // 9.3. Auto-number figures and tables
+    // 9.3. Auto-number figures and tables (also builds label registry for cross-refs)
+    let refRegistry: RefRegistry = new Map();
     if (opts.autoNumberFigures) {
-        html = autoNumberFiguresAndTables(html);
+        const numberingResult = autoNumberFiguresAndTables(html);
+        html = numberingResult.html;
+        refRegistry = numberingResult.registry;
+    }
+
+    // 9.4. Resolve cross-references (@fig:label, @tab:label, @eq:label)
+    if (opts.resolveCrossRefs && refRegistry.size > 0) {
+        html = resolveReferences(html, refRegistry);
     }
 
     // 9.5. Restore footnotes as endnotes section
@@ -785,12 +872,15 @@ export async function convertNoteToHtml(
         ? `<hr style="border:none;border-top:1px solid #ddd;margin-top:40px;"><p style="color:#888;font-size:12px;">${escapeHtml(opts.footerText)}</p>`
         : '';
 
-    // Custom CSS
-    const customStyleTag = opts.customCss
-        ? `<style>${opts.customCss}</style>`
-        : '';
+    // Bibliography section (from citation processing)
+    const bibliographyHtml = citationResult?.bibliographyHtml || '';
 
-    return `<!DOCTYPE html>
+    // Custom CSS + journal template CSS
+    const journalCss = getJournalTemplateCss(opts.journalTemplate);
+    const allCss = [journalCss, opts.customCss || ''].filter(Boolean).join('\n');
+    const customStyleTag = allCss ? `<style>${allCss}</style>` : '';
+
+    let finalHtml = `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -801,9 +891,21 @@ ${customStyleTag}
 ${headerHtml}
 <h1 style="font-family:${theme.headingFontFamily};color:${theme.headingColor};font-size:${theme.h1Size};">${title}</h1>
 ${html}
+${bibliographyHtml}
 ${footerHtml}
 </body>
 </html>`;
+
+    // 11.5. Apply watermark if configured
+    if (opts.watermarkText) {
+        finalHtml = await applyWatermark(finalHtml, {
+            text: opts.watermarkText,
+            opacity: opts.watermarkOpacity,
+            forGoogleDocs: opts.targetFormat === 'google-docs',
+        });
+    }
+
+    return finalHtml;
 }
 
 // Re-export rasterizeSvgToPng for use by docx-builder and other exporters

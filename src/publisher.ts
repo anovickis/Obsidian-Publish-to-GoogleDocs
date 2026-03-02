@@ -179,6 +179,16 @@ export async function publishNote(
             resolveWikilinks: plugin.settings.resolveWikilinks,
             syntaxHighlighting: plugin.settings.syntaxHighlighting,
             customCss: plugin.settings.customCss || undefined,
+            citationStyle: plugin.settings.citationStyle,
+            bibFilePath: plugin.settings.bibFilePath,
+            resolveCrossRefs: plugin.settings.resolveCrossRefs,
+            mathAsImages: plugin.settings.mathAsImages,
+            journalTemplate: plugin.settings.journalTemplate,
+            optimizeImages: plugin.settings.optimizeImages,
+            maxImageWidth: plugin.settings.maxImageWidth,
+            imageQuality: plugin.settings.imageQuality,
+            watermarkText: plugin.settings.watermarkText,
+            watermarkOpacity: plugin.settings.watermarkOpacity,
         };
 
         const html = await convertNoteToHtml(plugin.app, file, uploadImage, convertOptions);
@@ -300,6 +310,16 @@ async function publishForPlatform(
             resolveWikilinks: plugin.settings.resolveWikilinks,
             syntaxHighlighting: plugin.settings.syntaxHighlighting,
             customCss: plugin.settings.customCss || undefined,
+            citationStyle: plugin.settings.citationStyle,
+            bibFilePath: plugin.settings.bibFilePath,
+            resolveCrossRefs: plugin.settings.resolveCrossRefs,
+            mathAsImages: plugin.settings.mathAsImages,
+            journalTemplate: plugin.settings.journalTemplate,
+            optimizeImages: plugin.settings.optimizeImages,
+            maxImageWidth: plugin.settings.maxImageWidth,
+            imageQuality: plugin.settings.imageQuality,
+            watermarkText: plugin.settings.watermarkText,
+            watermarkOpacity: plugin.settings.watermarkOpacity,
         };
 
         const html = await convertNoteToHtml(plugin.app, file, null, convertOptions);

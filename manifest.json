@@ -1,7 +1,7 @@
 {
     "id": "publish-to-google-docs",
     "name": "Publish to Google Docs",
-    "version": "2.0.0",
+    "version": "2.1.1",
     "minAppVersion": "1.0.0",
     "description": "Publish Obsidian notes to Google Docs, DOCX, and PDF. Supports LaTeX, images, SVGs, themes, and batch export.",
     "author": "Alex Novickis",

@@ -52,6 +52,16 @@ export async function exportToDocx(
             resolveWikilinks: plugin.settings.resolveWikilinks,
             syntaxHighlighting: plugin.settings.syntaxHighlighting,
             customCss: plugin.settings.customCss || undefined,
+            citationStyle: plugin.settings.citationStyle,
+            bibFilePath: plugin.settings.bibFilePath,
+            resolveCrossRefs: plugin.settings.resolveCrossRefs,
+            mathAsImages: plugin.settings.mathAsImages,
+            journalTemplate: plugin.settings.journalTemplate,
+            optimizeImages: plugin.settings.optimizeImages,
+            maxImageWidth: plugin.settings.maxImageWidth,
+            imageQuality: plugin.settings.imageQuality,
+            watermarkText: plugin.settings.watermarkText,
+            watermarkOpacity: plugin.settings.watermarkOpacity,
         };
 
         const html = await convertNoteToHtml(plugin.app, file, null, options);
@@ -73,6 +83,11 @@ export async function exportToDocx(
 
         progressNotice.hide();
         new Notice(`Exported to ${docxPath}`, 5000);
+
+        // Open with the system's default .docx viewer
+        const vaultPath = (plugin.app.vault.adapter as any).getBasePath();
+        const fullPath = require('path').join(vaultPath, docxPath);
+        require('electron').shell.openPath(fullPath);
 
     } catch (err) {
         progressNotice.hide();
@@ -123,6 +138,16 @@ export async function exportToPdf(
             resolveWikilinks: plugin.settings.resolveWikilinks,
             syntaxHighlighting: plugin.settings.syntaxHighlighting,
             customCss: plugin.settings.customCss || undefined,
+            citationStyle: plugin.settings.citationStyle,
+            bibFilePath: plugin.settings.bibFilePath,
+            resolveCrossRefs: plugin.settings.resolveCrossRefs,
+            mathAsImages: plugin.settings.mathAsImages,
+            journalTemplate: plugin.settings.journalTemplate,
+            optimizeImages: plugin.settings.optimizeImages,
+            maxImageWidth: plugin.settings.maxImageWidth,
+            imageQuality: plugin.settings.imageQuality,
+            watermarkText: plugin.settings.watermarkText,
+            watermarkOpacity: plugin.settings.watermarkOpacity,
         };
 
         const html = await convertNoteToHtml(plugin.app, file, null, options);
@@ -130,59 +155,67 @@ export async function exportToPdf(
         // Add print-specific styles to the HTML
         const printHtml = html.replace('</head>', `
             <style>
-                @media print {
-                    body { margin: 0; padding: 20px; }
-                    pre { white-space: pre-wrap; word-break: break-all; }
-                    img { max-width: 100%; page-break-inside: avoid; }
-                    h1, h2, h3, h4, h5, h6 { page-break-after: avoid; }
-                    table { page-break-inside: avoid; }
-                }
-                @page { margin: 2cm; }
+                body { margin: 0; padding: 20px; }
+                pre { white-space: pre-wrap; word-break: break-all; }
+                img { max-width: 100%; page-break-inside: avoid; }
+                h1, h2, h3, h4, h5, h6 { page-break-after: avoid; }
+                table { page-break-inside: avoid; }
             </style>
             </head>`);
 
-        // Create a hidden iframe, load the HTML, and trigger print
-        const iframe = document.createElement('iframe');
-        iframe.style.position = 'fixed';
-        iframe.style.right = '0';
-        iframe.style.bottom = '0';
-        iframe.style.width = '0';
-        iframe.style.height = '0';
-        iframe.style.border = 'none';
-        document.body.appendChild(iframe);
+        // Generate PDF directly using Electron's printToPDF (no print dialog)
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const electron = require('electron');
+        const { BrowserWindow, dialog } = electron.remote;
 
-        const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
-        if (!iframeDoc) {
-            throw new Error('Failed to access iframe document');
+        // Ask user where to save before generating
+        const saveResult = await dialog.showSaveDialog({
+            defaultPath: `${file.basename}.pdf`,
+            filters: [{ name: 'PDF Files', extensions: ['pdf'] }],
+        });
+
+        if (saveResult.canceled || !saveResult.filePath) {
+            progressNotice.hide();
+            return;
         }
 
-        iframeDoc.open();
-        iframeDoc.write(printHtml);
-        iframeDoc.close();
-
-        // Wait for images to load, then trigger print dialog
-        await new Promise<void>((resolve) => {
-            iframe.onload = () => resolve();
-            // Fallback timeout if onload doesn't fire
-            setTimeout(resolve, 2000);
+        // Create a hidden window to render the HTML
+        const win = new BrowserWindow({
+            show: false,
+            width: 800,
+            height: 600,
+            webPreferences: { offscreen: true },
         });
 
-        progressNotice.hide();
+        try {
+            await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(printHtml)}`);
 
-        // The user saves via the print dialog's "Save as PDF" option
-        iframe.contentWindow?.print();
+            // Wait for content to render
+            await new Promise(resolve => setTimeout(resolve, 1000));
 
-        await recordPublishEvent(plugin, {
-            filePath: file.path,
-            fileName: file.basename,
-            format: 'pdf',
-            success: true,
-        });
+            // Generate PDF
+            const pdfData = await win.webContents.printToPDF({
+                marginsType: 0,
+                printBackground: true,
+                pageSize: 'A4',
+            });
 
-        // Clean up iframe after a delay (let the print dialog finish)
-        setTimeout(() => {
-            document.body.removeChild(iframe);
-        }, 5000);
+            // Save to disk
+            const fs = require('fs');
+            fs.writeFileSync(saveResult.filePath, pdfData);
+
+            progressNotice.hide();
+            new Notice(`PDF saved to ${saveResult.filePath}`, 5000);
+
+            await recordPublishEvent(plugin, {
+                filePath: file.path,
+                fileName: file.basename,
+                format: 'pdf',
+                success: true,
+            });
+        } finally {
+            win.close();
+        }
 
     } catch (err) {
         progressNotice.hide();
