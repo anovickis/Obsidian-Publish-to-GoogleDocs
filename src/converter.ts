@@ -25,6 +25,8 @@ import { resolveEmbeds } from './embed-resolver';
 import { isMermaidBlock, extractMermaidSource, renderMermaidToImage } from './mermaid-renderer';
 import { extractFootnotes, restoreFootnotesInHtml, FootnoteExtraction } from './footnote-handler';
 import { autoNumberFiguresAndTables } from './numbering';
+import { resolveWikilinksInHtml } from './wikilink-resolver';
+import { highlightCodeBlocks } from './syntax-highlighter';
 
 // ============================================================
 // Types
@@ -719,6 +721,16 @@ export async function convertNoteToHtml(
     //    No MathJax rendering (no $ delimiters), no image loading (no ![[]] syntax).
     let html = await renderMarkdownToHtml(app, renderMd, file.path);
 
+    // 6.5. Resolve wikilinks to Google Docs hyperlinks (before cleanup strips classes)
+    if (opts.resolveWikilinks) {
+        html = resolveWikilinksInHtml(html, app, file);
+    }
+
+    // 6.7. Apply syntax highlighting to code blocks (before cleanup strips classes)
+    if (opts.syntaxHighlighting) {
+        html = highlightCodeBlocks(html);
+    }
+
     // 7. Restore LaTeX based on target format
     if (opts.targetFormat === 'medium' || opts.targetFormat === 'linkedin') {
         // Render math as inline PNG images (these platforms don't support LaTeX)
@@ -773,11 +785,17 @@ export async function convertNoteToHtml(
         ? `<hr style="border:none;border-top:1px solid #ddd;margin-top:40px;"><p style="color:#888;font-size:12px;">${escapeHtml(opts.footerText)}</p>`
         : '';
 
+    // Custom CSS
+    const customStyleTag = opts.customCss
+        ? `<style>${opts.customCss}</style>`
+        : '';
+
     return `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <title>${title}</title>
+${customStyleTag}
 </head>
 <body style="font-family:${theme.fontFamily};max-width:${theme.maxWidth};margin:auto;line-height:${theme.lineHeight};font-size:${theme.fontSize};color:${theme.textColor};">
 ${headerHtml}

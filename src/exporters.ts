@@ -18,6 +18,7 @@ import { htmlToDocx } from './docx-builder';
 import { ConvertOptions } from './types';
 import { hasFeature, showUpgradeNotice } from './license';
 import { publishNote } from './publisher';
+import { recordPublishEvent } from './history';
 
 // ---- DOCX Export ----
 
@@ -44,6 +45,13 @@ export async function exportToDocx(
             includeToc: plugin.settings.includeToc,
             headerText: plugin.settings.customHeaderText || undefined,
             footerText: plugin.settings.customFooterText || undefined,
+            resolveEmbeds: plugin.settings.resolveEmbeds,
+            renderMermaid: plugin.settings.renderMermaid,
+            handleFootnotes: plugin.settings.handleFootnotes,
+            autoNumberFigures: plugin.settings.autoNumberFigures,
+            resolveWikilinks: plugin.settings.resolveWikilinks,
+            syntaxHighlighting: plugin.settings.syntaxHighlighting,
+            customCss: plugin.settings.customCss || undefined,
         };
 
         const html = await convertNoteToHtml(plugin.app, file, null, options);
@@ -56,6 +64,13 @@ export async function exportToDocx(
         const docxPath = file.path.replace(/\.md$/, '.docx');
         await plugin.app.vault.adapter.writeBinary(docxPath, new Uint8Array(buffer));
 
+        await recordPublishEvent(plugin, {
+            filePath: file.path,
+            fileName: file.basename,
+            format: 'docx',
+            success: true,
+        });
+
         progressNotice.hide();
         new Notice(`Exported to ${docxPath}`, 5000);
 
@@ -63,6 +78,14 @@ export async function exportToDocx(
         progressNotice.hide();
         console.error('DOCX export error:', err);
         new Notice(`DOCX export failed: ${(err as Error).message}`);
+
+        await recordPublishEvent(plugin, {
+            filePath: file.path,
+            fileName: file.basename,
+            format: 'docx',
+            success: false,
+            error: (err as Error).message,
+        });
     }
 }
 
@@ -93,6 +116,13 @@ export async function exportToPdf(
             includeToc: plugin.settings.includeToc,
             headerText: plugin.settings.customHeaderText || undefined,
             footerText: plugin.settings.customFooterText || undefined,
+            resolveEmbeds: plugin.settings.resolveEmbeds,
+            renderMermaid: plugin.settings.renderMermaid,
+            handleFootnotes: plugin.settings.handleFootnotes,
+            autoNumberFigures: plugin.settings.autoNumberFigures,
+            resolveWikilinks: plugin.settings.resolveWikilinks,
+            syntaxHighlighting: plugin.settings.syntaxHighlighting,
+            customCss: plugin.settings.customCss || undefined,
         };
 
         const html = await convertNoteToHtml(plugin.app, file, null, options);
@@ -142,6 +172,13 @@ export async function exportToPdf(
         // The user saves via the print dialog's "Save as PDF" option
         iframe.contentWindow?.print();
 
+        await recordPublishEvent(plugin, {
+            filePath: file.path,
+            fileName: file.basename,
+            format: 'pdf',
+            success: true,
+        });
+
         // Clean up iframe after a delay (let the print dialog finish)
         setTimeout(() => {
             document.body.removeChild(iframe);
@@ -151,6 +188,14 @@ export async function exportToPdf(
         progressNotice.hide();
         console.error('PDF export error:', err);
         new Notice(`PDF export failed: ${(err as Error).message}`);
+
+        await recordPublishEvent(plugin, {
+            filePath: file.path,
+            fileName: file.basename,
+            format: 'pdf',
+            success: false,
+            error: (err as Error).message,
+        });
     }
 }
 

@@ -23,6 +23,7 @@ import {
 import { getValidToken } from './auth';
 import { TargetFormat } from './types';
 import { copyHtmlToClipboard, htmlToPlainText } from './clipboard';
+import { recordPublishEvent } from './history';
 
 // ---- Choice Modal ----
 
@@ -175,6 +176,9 @@ export async function publishNote(
             renderMermaid: plugin.settings.renderMermaid,
             handleFootnotes: plugin.settings.handleFootnotes,
             autoNumberFigures: plugin.settings.autoNumberFigures,
+            resolveWikilinks: plugin.settings.resolveWikilinks,
+            syntaxHighlighting: plugin.settings.syntaxHighlighting,
+            customCss: plugin.settings.customCss || undefined,
         };
 
         const html = await convertNoteToHtml(plugin.app, file, uploadImage, convertOptions);
@@ -216,7 +220,16 @@ export async function publishNote(
             fm.google_doc = result.webViewLink;
         });
 
-        // 10. Success!
+        // 10. Record in publish history
+        await recordPublishEvent(plugin, {
+            filePath: file.path,
+            fileName: file.basename,
+            format: 'google-docs',
+            success: true,
+            url: result.webViewLink,
+        });
+
+        // 11. Success!
         progressNotice.hide();
         new Notice(`Published to Google Docs!\n${result.webViewLink}`, 10000);
 
@@ -245,6 +258,15 @@ export async function publishNote(
 
         new Notice(`Publish failed: ${(err as Error).message}`);
         console.error('Publish to Google Docs error:', err);
+
+        // Record failure in history
+        await recordPublishEvent(plugin, {
+            filePath: file.path,
+            fileName: file.basename,
+            format: 'google-docs',
+            success: false,
+            error: (err as Error).message,
+        });
     }
 }
 
@@ -275,6 +297,9 @@ async function publishForPlatform(
             renderMermaid: plugin.settings.renderMermaid,
             handleFootnotes: plugin.settings.handleFootnotes,
             autoNumberFigures: plugin.settings.autoNumberFigures,
+            resolveWikilinks: plugin.settings.resolveWikilinks,
+            syntaxHighlighting: plugin.settings.syntaxHighlighting,
+            customCss: plugin.settings.customCss || undefined,
         };
 
         const html = await convertNoteToHtml(plugin.app, file, null, convertOptions);
@@ -282,6 +307,14 @@ async function publishForPlatform(
         // Copy to clipboard as rich HTML
         const plainText = htmlToPlainText(html);
         await copyHtmlToClipboard(html, plainText);
+
+        // Record in history
+        await recordPublishEvent(plugin, {
+            filePath: file.path,
+            fileName: file.basename,
+            format: targetFormat,
+            success: true,
+        });
 
         progressNotice.hide();
         new Notice(
@@ -294,5 +327,13 @@ async function publishForPlatform(
         progressNotice.hide();
         new Notice(`${platformName} export failed: ${(err as Error).message}`);
         console.error(`${platformName} export error:`, err);
+
+        await recordPublishEvent(plugin, {
+            filePath: file.path,
+            fileName: file.basename,
+            format: targetFormat,
+            success: false,
+            error: (err as Error).message,
+        });
     }
 }

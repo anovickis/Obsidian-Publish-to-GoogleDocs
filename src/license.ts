@@ -42,6 +42,7 @@ const FEATURE_TIER: Record<Feature, number> = {
     'footnotes': 1,
     'auto-numbering': 1,
     'platform-export': 1,
+    'syntax-highlight': 1,
     'true-update': 2,
     'auto-publish': 2,
     'history': 2,

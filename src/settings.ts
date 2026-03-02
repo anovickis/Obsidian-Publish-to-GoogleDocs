@@ -20,6 +20,7 @@ import {
     getTierDisplayName,
 } from './license';
 import { getThemeOptions } from './themes';
+import { loadHistory, clearHistory, formatEvent, PublishEvent } from './history';
 
 export class PublishSettingTab extends PluginSettingTab {
     plugin: PublishToGoogleDocsPlugin;
@@ -41,6 +42,7 @@ export class PublishSettingTab extends PluginSettingTab {
         this.renderDriveSection(containerEl);
         this.renderExportSection(containerEl);
         this.renderAdvancedSection(containerEl);
+        this.renderHistorySection(containerEl);
         this.renderSetupSection(containerEl);
     }
 
@@ -460,6 +462,68 @@ export class PublishSettingTab extends PluginSettingTab {
             numberingSetting.setDisabled(true);
             numberingSetting.descEl.textContent += ' (Pro)';
         }
+
+        // Resolve wikilinks to hyperlinks
+        const wikilinkSetting = new Setting(containerEl)
+            .setName('Resolve wikilinks')
+            .setDesc('Convert [[links]] to clickable Google Docs hyperlinks (if the linked note has been published)');
+
+        if (isPro) {
+            wikilinkSetting.addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.resolveWikilinks)
+                    .onChange(async (value) => {
+                        this.plugin.settings.resolveWikilinks = value;
+                        await this.plugin.saveSettings();
+                    }),
+            );
+        } else {
+            wikilinkSetting.setDisabled(true);
+            wikilinkSetting.descEl.textContent += ' (Pro)';
+        }
+
+        // Syntax highlighting
+        const syntaxSetting = new Setting(containerEl)
+            .setName('Syntax highlighting')
+            .setDesc('Add colored syntax highlighting to code blocks in exports');
+
+        if (isPro) {
+            syntaxSetting.addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.syntaxHighlighting)
+                    .onChange(async (value) => {
+                        this.plugin.settings.syntaxHighlighting = value;
+                        await this.plugin.saveSettings();
+                    }),
+            );
+        } else {
+            syntaxSetting.setDisabled(true);
+            syntaxSetting.descEl.textContent += ' (Pro)';
+        }
+
+        // Custom CSS
+        const cssSetting = new Setting(containerEl)
+            .setName('Custom CSS')
+            .setDesc('Custom CSS rules injected into exported documents (overrides theme styles)');
+
+        if (isPro) {
+            cssSetting.addTextArea((text) => {
+                text
+                    .setPlaceholder('body { font-size: 16px; }\nh1 { color: #333; }')
+                    .setValue(this.plugin.settings.customCss)
+                    .onChange(async (value) => {
+                        this.plugin.settings.customCss = value;
+                        await this.plugin.saveSettings();
+                    });
+                text.inputEl.rows = 6;
+                text.inputEl.style.width = '100%';
+                text.inputEl.style.fontFamily = 'monospace';
+                text.inputEl.style.fontSize = '12px';
+            });
+        } else {
+            cssSetting.setDisabled(true);
+            cssSetting.descEl.textContent += ' (Pro)';
+        }
     }
 
     // ---- Section 6: Advanced (Premium) ----
@@ -494,7 +558,82 @@ export class PublishSettingTab extends PluginSettingTab {
         }
     }
 
-    // ---- Section 7: Setup Instructions ----
+    // ---- Section 7: Publish History (Premium) ----
+
+    private renderHistorySection(containerEl: HTMLElement): void {
+        containerEl.createEl('h3', { text: 'Publish History' });
+
+        const isPremium = hasFeature(this.plugin.settings, 'history');
+
+        if (!isPremium) {
+            const lockNote = containerEl.createEl('p');
+            lockNote.style.cssText = 'color:#888;font-style:italic;font-size:13px;';
+            lockNote.textContent = 'Publish history requires a Premium license.';
+            return;
+        }
+
+        // Load history asynchronously and render
+        const historyContainer = containerEl.createDiv();
+        historyContainer.style.cssText = 'margin:8px 0;';
+
+        loadHistory(this.plugin).then((events) => {
+            if (events.length === 0) {
+                historyContainer.createEl('p', {
+                    text: 'No publish history yet.',
+                }).style.cssText = 'color:#888;font-style:italic;font-size:13px;';
+                return;
+            }
+
+            // Show last 10 events
+            const list = historyContainer.createEl('div');
+            list.style.cssText = 'max-height:200px;overflow-y:auto;font-size:13px;';
+
+            const displayEvents = events.slice(0, 10);
+            for (const event of displayEvents) {
+                const row = list.createEl('div');
+                row.style.cssText = 'padding:4px 0;border-bottom:1px solid #eee;display:flex;align-items:center;gap:8px;';
+
+                const statusDot = row.createSpan();
+                statusDot.style.cssText = `width:8px;height:8px;border-radius:50%;flex-shrink:0;background:${event.success ? '#00c853' : '#ff5252'};`;
+
+                const text = row.createSpan();
+                text.textContent = formatEvent(event);
+                text.style.cssText = 'flex:1;';
+
+                if (event.url) {
+                    const link = row.createEl('a', { text: 'Open' });
+                    link.href = event.url;
+                    link.style.cssText = 'color:#448aff;font-size:12px;text-decoration:none;';
+                    link.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        window.open(event.url);
+                    });
+                }
+            }
+
+            if (events.length > 10) {
+                const moreNote = historyContainer.createEl('p');
+                moreNote.textContent = `...and ${events.length - 10} more events`;
+                moreNote.style.cssText = 'color:#888;font-size:12px;margin-top:4px;';
+            }
+
+            // Clear history button
+            new Setting(historyContainer)
+                .setName('')
+                .addButton((btn) =>
+                    btn
+                        .setButtonText('Clear history')
+                        .setWarning()
+                        .onClick(async () => {
+                            await clearHistory(this.plugin);
+                            new Notice('Publish history cleared.');
+                            this.display();
+                        }),
+                );
+        });
+    }
+
+    // ---- Section 8: Setup Instructions ----
 
     private renderSetupSection(containerEl: HTMLElement): void {
         containerEl.createEl('h3', { text: 'Setup Instructions' });

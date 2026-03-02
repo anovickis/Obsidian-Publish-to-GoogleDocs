@@ -16,6 +16,7 @@ export type Feature =
     | 'embed-resolve'
     | 'footnotes'
     | 'auto-numbering'
+    | 'syntax-highlight'
     | 'true-update'
     | 'auto-publish'
     | 'history'
@@ -56,6 +57,8 @@ export interface PluginSettings {
     renderMermaid: boolean;
     handleFootnotes: boolean;
     autoNumberFigures: boolean;
+    syntaxHighlighting: boolean;
+    customCss: string;
 
     // Premium settings
     autoPublishOnSave: boolean;
@@ -92,6 +95,8 @@ export const DEFAULT_SETTINGS: PluginSettings = {
     renderMermaid: false,
     handleFootnotes: false,
     autoNumberFigures: false,
+    syntaxHighlighting: false,
+    customCss: '',
 
     // Premium settings
     autoPublishOnSave: false,
@@ -135,6 +140,9 @@ export interface ConvertOptions {
     renderMermaid: boolean;    // render ```mermaid blocks to PNG images
     handleFootnotes: boolean;  // extract [^id] footnotes and render as endnotes
     autoNumberFigures: boolean; // auto-number figures and tables
+    resolveWikilinks: boolean; // resolve [[links]] to Google Doc hyperlinks
+    syntaxHighlighting: boolean; // add colored syntax highlighting to code blocks
+    customCss?: string;        // custom CSS injected into the HTML document
 }
 
 export const DEFAULT_CONVERT_OPTIONS: ConvertOptions = {
@@ -146,6 +154,8 @@ export const DEFAULT_CONVERT_OPTIONS: ConvertOptions = {
     renderMermaid: false,
     handleFootnotes: false,
     autoNumberFigures: false,
+    resolveWikilinks: false,
+    syntaxHighlighting: false,
 };
 
 // ---- Conversion Types ----
