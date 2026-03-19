@@ -1,8 +1,8 @@
 // exporters.ts — Local export functions (DOCX, PDF)
 //
-// These functions handle exporting Obsidian notes to local files
-// without uploading to Google Drive. They use the same converter
-// pipeline but with imageMode: 'embed' (base64 data URIs).
+// Uses pandoc for high-quality output with native equation support
+// (OMML equations in DOCX, XeLaTeX-typeset math in PDF).
+// Falls back to HTML-based conversion if pandoc is not installed.
 
 import {
     App,
@@ -13,32 +13,335 @@ import {
     Setting,
 } from 'obsidian';
 import type PublishToGoogleDocsPlugin from './main';
-import { convertNoteToHtml } from './converter';
+import { convertNoteToHtml, rasterizeSvgToPng } from './converter';
 import { htmlToDocx } from './docx-builder';
 import { ConvertOptions } from './types';
 import { hasFeature, showUpgradeNotice } from './license';
 import { publishNote } from './publisher';
 import { recordPublishEvent } from './history';
+import { resolveEmbeds } from './embed-resolver';
 
-// ---- DOCX Export ----
+// ============================================================
+// Pandoc Helpers
+// ============================================================
 
 /**
- * Export a single note to a .docx file saved in the vault.
+ * Run pandoc as a child process.
+ * Throws on non-zero exit with stderr as the error message.
+ */
+function runPandoc(args: string[]): Promise<{ stdout: string; stderr: string }> {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { execFile } = require('child_process');
+    return new Promise((resolve, reject) => {
+        execFile('pandoc', args, { maxBuffer: 50 * 1024 * 1024 },
+            (error: any, stdout: string, stderr: string) => {
+                if (error) reject(new Error(stderr || error.message));
+                else resolve({ stdout, stderr });
+            },
+        );
+    });
+}
+
+/**
+ * Check if pandoc is available on the system PATH.
+ */
+async function isPandocAvailable(): Promise<boolean> {
+    try {
+        await runPandoc(['--version']);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Find a LaTeX PDF engine for pandoc (xelatex, lualatex, or pdflatex).
+ * Returns the engine name or null if none found.
+ */
+async function findPdfEngine(): Promise<string | null> {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { execFile } = require('child_process');
+    for (const engine of ['xelatex', 'lualatex', 'pdflatex']) {
+        try {
+            await new Promise<void>((resolve, reject) => {
+                execFile(engine, ['--version'], (err: any) => {
+                    if (err) reject(err); else resolve();
+                });
+            });
+            return engine;
+        } catch { /* try next */ }
+    }
+    return null;
+}
+
+/**
+ * Preprocess Obsidian markdown for pandoc consumption.
+ *
+ * - Strips YAML frontmatter
+ * - Resolves ![[note]] transclusion embeds
+ * - Converts ![[image]] wikilinks to ![](absolute_path)
+ * - Rasterizes SVG images to temp PNGs (DOCX/PDF can't handle SVG)
+ * - Converts [[wikilinks]] to bold text
+ * - Converts Obsidian callouts to blockquotes
+ *
+ * LaTeX math ($...$, $$...$$) is left untouched — pandoc handles it natively.
+ */
+async function preprocessForPandoc(
+    app: App,
+    file: TFile,
+    doResolveEmbeds: boolean,
+): Promise<{ markdown: string; tempFiles: string[] }> {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const nodePath = require('path');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const fs = require('fs');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const os = require('os');
+
+    const vaultBase: string = (app.vault.adapter as any).getBasePath();
+    const tempFiles: string[] = [];
+
+    let md = await app.vault.read(file);
+
+    // Strip YAML frontmatter (pandoc metadata handling differs from Obsidian)
+    const fmMatch = md.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
+    if (fmMatch) md = md.slice(fmMatch[0].length);
+
+    // Resolve ![[note]] transclusion embeds
+    if (doResolveEmbeds) {
+        md = await resolveEmbeds(md, app, file);
+    }
+
+    // --- Protect code blocks from further regex ---
+    const codeBlocks: { placeholder: string; original: string }[] = [];
+    md = md.replace(/```[\s\S]*?```/g, (match) => {
+        const ph = `__PANDOC_CB${codeBlocks.length}__`;
+        codeBlocks.push({ placeholder: ph, original: match });
+        return ph;
+    });
+    md = md.replace(/`[^`\n]+`/g, (match) => {
+        const ph = `__PANDOC_CI${codeBlocks.length}__`;
+        codeBlocks.push({ placeholder: ph, original: match });
+        return ph;
+    });
+
+    // --- Resolve wikilink images: ![[path]] or ![[path|size/alt]] ---
+    const wikiImgRegex = /!\[\[([^\]|]+?)(?:\|([^\]]*))?\]\]/g;
+    const imgReplacements: [string, string][] = [];
+    let m;
+    while ((m = wikiImgRegex.exec(md)) !== null) {
+        const imgPath = m[1].trim();
+        const sizeOrAlt = (m[2] || '').trim();
+
+        const imageFile = app.metadataCache.getFirstLinkpathDest(imgPath, file.path);
+        if (!imageFile) {
+            imgReplacements.push([m[0], `*[Image not found: ${imgPath}]*`]);
+            continue;
+        }
+
+        let absPath = nodePath.join(vaultBase, imageFile.path).replace(/\\/g, '/');
+
+        // SVG → rasterize to temp PNG
+        if (imageFile.extension.toLowerCase() === 'svg') {
+            try {
+                const svgData = await app.vault.readBinary(imageFile);
+                const pngData = await rasterizeSvgToPng(svgData);
+                const tmpPng = nodePath.join(
+                    os.tmpdir(),
+                    `obsidian-export-${Date.now()}-${imageFile.basename}.png`,
+                );
+                fs.writeFileSync(tmpPng, Buffer.from(pngData));
+                absPath = tmpPng.replace(/\\/g, '/');
+                tempFiles.push(tmpPng);
+            } catch (err) {
+                console.warn(`SVG rasterization failed for ${imgPath}:`, err);
+            }
+        }
+
+        // Width attribute (pandoc supports {width=Npx} after the image)
+        let widthSuffix = '';
+        let alt = '';
+        if (sizeOrAlt && /^\d+(?:x\d+)?$/.test(sizeOrAlt)) {
+            widthSuffix = `{ width=${sizeOrAlt.split('x')[0]}px }`;
+        } else if (sizeOrAlt) {
+            alt = sizeOrAlt;
+        }
+
+        imgReplacements.push([m[0], `![${alt}](${absPath})${widthSuffix}`]);
+    }
+    for (const [orig, repl] of imgReplacements) {
+        md = md.split(orig).join(repl);
+    }
+
+    // --- Resolve standard markdown images with relative paths ---
+    md = md.replace(/!\[([^\]]*)\]\((?!https?:\/\/)([^)]+)\)/g, (match, alt, relPath) => {
+        const decoded = decodeURIComponent(relPath.trim());
+        const resolved = app.metadataCache.getFirstLinkpathDest(decoded, file.path);
+        if (resolved) {
+            const abs = nodePath.join(vaultBase, resolved.path).replace(/\\/g, '/');
+            return `![${alt}](${abs})`;
+        }
+        return match;
+    });
+
+    // --- Convert [[wikilinks]] to bold text ---
+    md = md.replace(/\[\[([^\]|]+?)(?:\|([^\]]*))?\]\]/g, (_, target, alias) => {
+        return `**${alias || target}**`;
+    });
+
+    // --- Convert Obsidian callouts to blockquotes ---
+    // > [!type] Title → > **Title**
+    md = md.replace(/^(>\s*)\[!(\w+)\]\s*(.*)/gm, (_, prefix, type, title) => {
+        const display = title.trim() || type.charAt(0).toUpperCase() + type.slice(1);
+        return `${prefix}**${display}**`;
+    });
+
+    // --- Fix LaTeX for pandoc's texmath parser ---
+    // Bare _\text{...} subscripts (without outer braces) cause a parse failure
+    // when followed by \tag{N}. Normalize to _{\text{...}} which is equivalent
+    // LaTeX but parseable by texmath.
+    md = md.replace(/_\\text\{([^}]*)\}/g, '_{\\text{$1}}');
+    md = md.replace(/\^\\text\{([^}]*)\}/g, '^{\\text{$1}}');
+
+    // --- Restore code blocks ---
+    for (let i = codeBlocks.length - 1; i >= 0; i--) {
+        md = md.split(codeBlocks[i].placeholder).join(codeBlocks[i].original);
+    }
+
+    return { markdown: md, tempFiles };
+}
+
+/**
+ * Clean up temporary files created during preprocessing.
+ */
+function cleanupTemp(paths: string[]): void {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const fs = require('fs');
+    for (const p of paths) {
+        try { fs.unlinkSync(p); } catch { /* ignore */ }
+    }
+}
+
+// ============================================================
+// DOCX Export
+// ============================================================
+
+/**
+ * Export a note to DOCX using pandoc (native Word equations).
+ * Falls back to HTML-based builder if pandoc is not available.
  */
 export async function exportToDocx(
     plugin: PublishToGoogleDocsPlugin,
     file: TFile,
 ): Promise<void> {
-    // Feature gate
     if (!hasFeature(plugin.settings, 'docx-export')) {
         showUpgradeNotice('docx-export');
         return;
     }
 
+    // Try pandoc first, fall back to HTML-based export
+    if (await isPandocAvailable()) {
+        return exportToDocxPandoc(plugin, file);
+    }
+    console.log('[export] pandoc not found, using HTML-based DOCX export');
+    return exportToDocxLegacy(plugin, file);
+}
+
+/** Pandoc-based DOCX export — produces native Word equations via OMML. */
+async function exportToDocxPandoc(
+    plugin: PublishToGoogleDocsPlugin,
+    file: TFile,
+): Promise<void> {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const nodePath = require('path');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const fs = require('fs');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const os = require('os');
+
+    const progressNotice = new Notice('Exporting to DOCX (pandoc)...', 0);
+    let tempMd = '';
+    let tempFiles: string[] = [];
+
+    try {
+        // 1. Preprocess markdown
+        const preprocessed = await preprocessForPandoc(
+            plugin.app, file, plugin.settings.resolveEmbeds,
+        );
+        tempFiles = preprocessed.tempFiles;
+
+        // 2. Write to temp file
+        tempMd = nodePath.join(os.tmpdir(), `obsidian-docx-${Date.now()}.md`);
+        fs.writeFileSync(tempMd, preprocessed.markdown, 'utf-8');
+
+        // 3. Output path (alongside the .md file)
+        const vaultBase = (plugin.app.vault.adapter as any).getBasePath();
+        const docxPath = file.path.replace(/\.md$/, '.docx');
+        const absDocx = nodePath.join(vaultBase, docxPath);
+
+        // 4. Resource path (so pandoc can find images relative to the note)
+        const resourceDir = nodePath.join(vaultBase, nodePath.dirname(file.path));
+
+        // 5. Build pandoc args
+        const args = [
+            tempMd,
+            '-o', absDocx,
+            '--from', 'markdown+tex_math_dollars+pipe_tables+strikeout+task_lists',
+            '--to', 'docx',
+            '--resource-path', resourceDir,
+        ];
+
+        // Optional: custom reference doc for Word styling
+        const refDoc = nodePath.join(vaultBase, 'reference.docx');
+        if (fs.existsSync(refDoc)) {
+            args.push('--reference-doc', refDoc);
+        }
+
+        // 6. Run pandoc
+        console.log('[export] Running pandoc:', args.join(' '));
+        await runPandoc(args);
+
+        // 7. Record success
+        await recordPublishEvent(plugin, {
+            filePath: file.path,
+            fileName: file.basename,
+            format: 'docx',
+            success: true,
+        });
+
+        progressNotice.hide();
+        new Notice(`Exported to ${docxPath}`, 5000);
+
+        // Open in default viewer
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        require('electron').shell.openPath(absDocx);
+
+    } catch (err) {
+        progressNotice.hide();
+        console.error('DOCX export error:', err);
+        new Notice(`DOCX export failed: ${(err as Error).message}`);
+
+        await recordPublishEvent(plugin, {
+            filePath: file.path,
+            fileName: file.basename,
+            format: 'docx',
+            success: false,
+            error: (err as Error).message,
+        });
+    } finally {
+        if (tempMd) try { require('fs').unlinkSync(tempMd); } catch { /* */ }
+        cleanupTemp(tempFiles);
+    }
+}
+
+/** Legacy HTML-based DOCX export (fallback when pandoc is not installed). */
+async function exportToDocxLegacy(
+    plugin: PublishToGoogleDocsPlugin,
+    file: TFile,
+): Promise<void> {
     const progressNotice = new Notice('Exporting to DOCX...', 0);
 
     try {
-        // Convert with embedded images (no Drive upload needed)
         const options: Partial<ConvertOptions> = {
             imageMode: 'embed',
             theme: plugin.settings.theme,
@@ -55,7 +358,9 @@ export async function exportToDocx(
             citationStyle: plugin.settings.citationStyle,
             bibFilePath: plugin.settings.bibFilePath,
             resolveCrossRefs: plugin.settings.resolveCrossRefs,
-            mathAsImages: plugin.settings.mathAsImages,
+            // Force math as images for legacy path — docx-builder can't handle
+            // text-delimiter math ($$...$$ or \(...\)) reliably
+            mathAsImages: true,
             journalTemplate: plugin.settings.journalTemplate,
             optimizeImages: plugin.settings.optimizeImages,
             maxImageWidth: plugin.settings.maxImageWidth,
@@ -65,12 +370,9 @@ export async function exportToDocx(
         };
 
         const html = await convertNoteToHtml(plugin.app, file, null, options);
-
-        // Build DOCX from HTML
         const blob = await htmlToDocx(html, file.basename, plugin.settings.theme);
         const buffer = await blob.arrayBuffer();
 
-        // Save alongside the markdown file
         const docxPath = file.path.replace(/\.md$/, '.docx');
         await plugin.app.vault.adapter.writeBinary(docxPath, new Uint8Array(buffer));
 
@@ -84,9 +386,10 @@ export async function exportToDocx(
         progressNotice.hide();
         new Notice(`Exported to ${docxPath}`, 5000);
 
-        // Open with the system's default .docx viewer
         const vaultPath = (plugin.app.vault.adapter as any).getBasePath();
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
         const fullPath = require('path').join(vaultPath, docxPath);
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
         require('electron').shell.openPath(fullPath);
 
     } catch (err) {
@@ -104,27 +407,134 @@ export async function exportToDocx(
     }
 }
 
-// ---- PDF Export ----
+// ============================================================
+// PDF Export
+// ============================================================
 
 /**
- * Export a single note to a PDF file.
- * Uses an offscreen iframe + window.print() as the most reliable
- * cross-platform approach within Obsidian's Electron environment.
+ * Export a note to PDF.
+ * Uses pandoc + XeLaTeX for proper typeset math if available.
+ * Falls back to HTML → BrowserWindow.printToPDF otherwise.
  */
 export async function exportToPdf(
     plugin: PublishToGoogleDocsPlugin,
     file: TFile,
 ): Promise<void> {
-    // Feature gate
     if (!hasFeature(plugin.settings, 'pdf-export')) {
         showUpgradeNotice('pdf-export');
         return;
     }
 
+    // Try pandoc + LaTeX engine first
+    if (await isPandocAvailable()) {
+        const engine = await findPdfEngine();
+        if (engine) {
+            return exportToPdfPandoc(plugin, file, engine);
+        }
+        console.log('[export] pandoc found but no LaTeX engine — falling back to HTML PDF');
+    }
+    return exportToPdfLegacy(plugin, file);
+}
+
+/** Pandoc-based PDF export — uses XeLaTeX for proper typeset math. */
+async function exportToPdfPandoc(
+    plugin: PublishToGoogleDocsPlugin,
+    file: TFile,
+    pdfEngine: string,
+): Promise<void> {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const nodePath = require('path');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const fs = require('fs');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const os = require('os');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const electron = require('electron');
+
+    const progressNotice = new Notice(`Generating PDF (pandoc + ${pdfEngine})...`, 0);
+    let tempMd = '';
+    let tempFiles: string[] = [];
+
+    try {
+        // 1. Ask user where to save
+        const { dialog } = electron.remote;
+        const saveResult = await dialog.showSaveDialog({
+            defaultPath: `${file.basename}.pdf`,
+            filters: [{ name: 'PDF Files', extensions: ['pdf'] }],
+        });
+        if (saveResult.canceled || !saveResult.filePath) {
+            progressNotice.hide();
+            return;
+        }
+
+        // 2. Preprocess markdown
+        const preprocessed = await preprocessForPandoc(
+            plugin.app, file, plugin.settings.resolveEmbeds,
+        );
+        tempFiles = preprocessed.tempFiles;
+
+        // 3. Write to temp file
+        tempMd = nodePath.join(os.tmpdir(), `obsidian-pdf-${Date.now()}.md`);
+        fs.writeFileSync(tempMd, preprocessed.markdown, 'utf-8');
+
+        // 4. Resource path
+        const vaultBase = (plugin.app.vault.adapter as any).getBasePath();
+        const resourceDir = nodePath.join(vaultBase, nodePath.dirname(file.path));
+
+        // 5. Build pandoc args
+        const args = [
+            tempMd,
+            '-o', saveResult.filePath,
+            '--from', 'markdown+tex_math_dollars+pipe_tables+strikeout+task_lists',
+            `--pdf-engine=${pdfEngine}`,
+            '--resource-path', resourceDir,
+            '-V', 'geometry:margin=1in',
+            // Cambria has broad Unicode coverage (≈, ×, °, em-dash, etc.)
+            // and ships with Windows. Latin Modern lacks many of these glyphs.
+            '-V', 'mainfont:Cambria',
+            '-V', 'monofont:Consolas',
+        ];
+
+        // 6. Run pandoc
+        console.log('[export] Running pandoc:', args.join(' '));
+        await runPandoc(args);
+
+        progressNotice.hide();
+        new Notice(`PDF saved to ${saveResult.filePath}`, 5000);
+
+        await recordPublishEvent(plugin, {
+            filePath: file.path,
+            fileName: file.basename,
+            format: 'pdf',
+            success: true,
+        });
+
+    } catch (err) {
+        progressNotice.hide();
+        console.error('PDF export error:', err);
+        new Notice(`PDF export failed: ${(err as Error).message}`);
+
+        await recordPublishEvent(plugin, {
+            filePath: file.path,
+            fileName: file.basename,
+            format: 'pdf',
+            success: false,
+            error: (err as Error).message,
+        });
+    } finally {
+        if (tempMd) try { require('fs').unlinkSync(tempMd); } catch { /* */ }
+        cleanupTemp(tempFiles);
+    }
+}
+
+/** Legacy HTML-based PDF export (fallback when pandoc/LaTeX not available). */
+async function exportToPdfLegacy(
+    plugin: PublishToGoogleDocsPlugin,
+    file: TFile,
+): Promise<void> {
     const progressNotice = new Notice('Generating PDF...', 0);
 
     try {
-        // Convert with embedded images
         const options: Partial<ConvertOptions> = {
             imageMode: 'embed',
             theme: plugin.settings.theme,
@@ -141,7 +551,9 @@ export async function exportToPdf(
             citationStyle: plugin.settings.citationStyle,
             bibFilePath: plugin.settings.bibFilePath,
             resolveCrossRefs: plugin.settings.resolveCrossRefs,
-            mathAsImages: plugin.settings.mathAsImages,
+            // Force math as images for legacy path — the hidden BrowserWindow
+            // has no MathJax, so $$...$$ text would appear as raw LaTeX
+            mathAsImages: true,
             journalTemplate: plugin.settings.journalTemplate,
             optimizeImages: plugin.settings.optimizeImages,
             maxImageWidth: plugin.settings.maxImageWidth,
@@ -152,7 +564,6 @@ export async function exportToPdf(
 
         const html = await convertNoteToHtml(plugin.app, file, null, options);
 
-        // Add print-specific styles to the HTML
         const printHtml = html.replace('</head>', `
             <style>
                 body { margin: 0; padding: 20px; }
@@ -163,12 +574,10 @@ export async function exportToPdf(
             </style>
             </head>`);
 
-        // Generate PDF directly using Electron's printToPDF (no print dialog)
         // eslint-disable-next-line @typescript-eslint/no-var-requires
         const electron = require('electron');
         const { BrowserWindow, dialog } = electron.remote;
 
-        // Ask user where to save before generating
         const saveResult = await dialog.showSaveDialog({
             defaultPath: `${file.basename}.pdf`,
             filters: [{ name: 'PDF Files', extensions: ['pdf'] }],
@@ -179,7 +588,6 @@ export async function exportToPdf(
             return;
         }
 
-        // Create a hidden window to render the HTML
         const win = new BrowserWindow({
             show: false,
             width: 800,
@@ -189,20 +597,16 @@ export async function exportToPdf(
 
         try {
             await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(printHtml)}`);
-
-            // Wait for content to render
             await new Promise(resolve => setTimeout(resolve, 1000));
 
-            // Generate PDF
             const pdfData = await win.webContents.printToPDF({
                 marginsType: 0,
                 printBackground: true,
                 pageSize: 'A4',
             });
 
-            // Save to disk
-            const fs = require('fs');
-            fs.writeFileSync(saveResult.filePath, pdfData);
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            require('fs').writeFileSync(saveResult.filePath, pdfData);
 
             progressNotice.hide();
             new Notice(`PDF saved to ${saveResult.filePath}`, 5000);
@@ -232,7 +636,9 @@ export async function exportToPdf(
     }
 }
 
-// ---- Batch Publish ----
+// ============================================================
+// Batch Publish
+// ============================================================
 
 /**
  * Progress modal for batch publishing.
@@ -289,13 +695,11 @@ export async function batchPublishFolder(
     plugin: PublishToGoogleDocsPlugin,
     folder: TFolder,
 ): Promise<void> {
-    // Feature gate
     if (!hasFeature(plugin.settings, 'batch-publish')) {
         showUpgradeNotice('batch-publish');
         return;
     }
 
-    // Collect all .md files in the folder (recursively)
     const files: TFile[] = [];
     function collectFiles(f: TFolder): void {
         for (const child of f.children) {
@@ -313,7 +717,6 @@ export async function batchPublishFolder(
         return;
     }
 
-    // Rate limit warning
     const MAX_BATCH = 50;
     if (files.length > MAX_BATCH) {
         new Notice(
@@ -325,7 +728,6 @@ export async function batchPublishFolder(
         files.splice(MAX_BATCH);
     }
 
-    // Show progress modal
     const modal = new BatchProgressModal(plugin.app);
     modal.open();
 
@@ -348,7 +750,6 @@ export async function batchPublishFolder(
             console.error(`Batch publish failed for ${file.path}:`, err);
         }
 
-        // 1-second delay between publishes to avoid rate limiting
         if (i < files.length - 1) {
             await new Promise((resolve) => setTimeout(resolve, 1000));
         }
@@ -356,7 +757,6 @@ export async function batchPublishFolder(
 
     modal.close();
 
-    // Results summary
     const cancelNote = modal.isCancelled() ? ' (cancelled)' : '';
     let message = `Batch publish complete${cancelNote}: ${succeeded} succeeded`;
     if (failed > 0) {

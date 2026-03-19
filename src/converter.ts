@@ -198,6 +198,30 @@ function escapeHtml(text: string): string {
         .replace(/"/g, '&quot;');
 }
 
+/**
+ * Sanitize LaTeX for the Auto-LaTeX Equations Google Docs add-on.
+ * The add-on's parser can't handle Unicode characters inside \text{} —
+ * replace them with LaTeX equivalents that render identically.
+ */
+function sanitizeLatexForGoogleDocs(latex: string): string {
+    return latex
+        // \text{–} (en-dash U+2013) → \text{--}  (LaTeX renders -- as en-dash)
+        .replace(/\u2013/g, '--')
+        // \text{—} (em-dash U+2014) → \text{---}
+        .replace(/\u2014/g, '---')
+        // ° (degree U+00B0) outside math → ^\circ
+        .replace(/°/g, '^{\\circ}')
+        // × (multiplication U+00D7) → \times
+        .replace(/×/g, '\\times')
+        // ± (plus-minus U+00B1) → \pm
+        .replace(/\u00B1/g, '\\pm')
+        // ≈ (approx U+2248) → \approx  (in case literal Unicode was used)
+        .replace(/\u2248/g, '\\approx')
+        // ≤ ≥ (U+2264, U+2265) → \leq \geq
+        .replace(/\u2264/g, '\\leq')
+        .replace(/\u2265/g, '\\geq');
+}
+
 function restoreMathInHtml(
     html: string,
     math: MathExtraction[],
@@ -205,13 +229,17 @@ function restoreMathInHtml(
 ): string {
     let result = html;
     for (const m of math) {
-        const latexHtml = escapeHtml(m.latex);
+        let latexContent = m.latex;
         let restored: string;
         if (targetFormat === 'google-docs') {
+            // Sanitize Unicode that the Auto-LaTeX add-on can't parse
+            latexContent = sanitizeLatexForGoogleDocs(latexContent);
+            const latexHtml = escapeHtml(latexContent);
             // Use $$...$$ for both inline and display math.
             // Auto-LaTeX Equations add-on only reliably recognizes $$ delimiters.
             restored = `$$${latexHtml}$$`;
         } else {
+            const latexHtml = escapeHtml(latexContent);
             // For DOCX/local export: keep \(...\) and \[...\] which the
             // docx-builder parses to render math as images.
             restored = m.isDisplay ? `\\[${latexHtml}\\]` : `\\(${latexHtml}\\)`;
@@ -232,12 +260,22 @@ async function restoreMathAsImages(
     let result = html;
     for (const m of math) {
         try {
-            const img = await renderLatexToImage(m.latex, m.isDisplay);
+            const svgResult = await renderLatexToImage(m.latex, m.isDisplay);
+            // Rasterize SVG to PNG for platform compatibility
+            // (Google Docs doesn't support SVG in HTML import, DOCX needs PNG)
+            const pngData = await rasterizeSvgToPng(svgResult.data);
+            const bytes = new Uint8Array(pngData);
+            let binary = '';
+            for (let j = 0; j < bytes.length; j++) {
+                binary += String.fromCharCode(bytes[j]);
+            }
+            const pngDataUri = `data:image/png;base64,${btoa(binary)}`;
+
             const altText = escapeHtml(m.latex);
             const style = m.isDisplay
                 ? 'display:block;margin:12px auto;'
                 : 'display:inline;vertical-align:middle;height:1.2em;';
-            const tag = `<img src="${img.dataUri}" alt="${altText}" style="${style}" width="${img.width}" height="${img.height}">`;
+            const tag = `<img src="${pngDataUri}" alt="${altText}" style="${style}" width="${svgResult.width}" height="${svgResult.height}">`;
             result = result.split(m.placeholder).join(tag);
         } catch (err) {
             console.warn(`Failed to render LaTeX as image: ${m.latex}`, err);

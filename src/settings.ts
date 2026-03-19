@@ -915,5 +915,79 @@ export class PublishSettingTab extends PluginSettingTab {
             'this file will be synced too. The plugin only requests the narrowest ' +
             'possible scope (<code>drive.file</code>) which limits access to files ' +
             'created by this plugin.';
+
+        // ---- Pandoc / LaTeX setup (for DOCX & PDF export) ----
+        const pandocDetails = containerEl.createEl('details');
+        pandocDetails.createEl('summary', {
+            text: 'DOCX & PDF export — required tools (pandoc, LaTeX)',
+        });
+
+        const pandocIntro = pandocDetails.createEl('p');
+        pandocIntro.innerHTML =
+            'DOCX and PDF export use <b>pandoc</b> for high-quality output with ' +
+            '<b>native Word equations</b> (DOCX) and <b>LaTeX-typeset math</b> (PDF). ' +
+            'If pandoc is not installed, the plugin falls back to an HTML-based ' +
+            'converter (lower quality, math rendered as images).';
+
+        const pandocSteps = pandocDetails.createEl('ol');
+        const pandocInstructions = [
+            '<b>Pandoc</b> (required for DOCX & PDF):<br>' +
+            '<a href="https://pandoc.org/installing.html">pandoc.org/installing.html</a><br>' +
+            'Windows: <code>winget install JohnMacFarlane.Pandoc</code> or download the .msi installer.<br>' +
+            'macOS: <code>brew install pandoc</code><br>' +
+            'Linux: <code>sudo apt install pandoc</code> (or your distro\'s package manager)',
+
+            '<b>LaTeX engine</b> (required for PDF export only — DOCX works without it):<br>' +
+            '<a href="https://miktex.org/download">miktex.org/download</a> (Windows, recommended) or ' +
+            '<a href="https://tug.org/texlive/">tug.org/texlive</a> (all platforms)<br>' +
+            'Windows: <code>winget install MiKTeX.MiKTeX</code><br>' +
+            'macOS: <code>brew install --cask mactex-no-gui</code><br>' +
+            'Linux: <code>sudo apt install texlive-xetex</code><br>' +
+            'The plugin uses <b>XeLaTeX</b> (included with MiKTeX and TeX Live) for full Unicode and font support.',
+
+            '<b>Verify installation</b> — open a terminal and run:<br>' +
+            '<code>pandoc --version</code> (should show 3.x+)<br>' +
+            '<code>xelatex --version</code> (should show XeTeX/MiKTeX or TeX Live)<br>' +
+            'If the commands are not found, restart your terminal or add them to your system PATH.',
+        ];
+
+        for (const step of pandocInstructions) {
+            const li = pandocSteps.createEl('li');
+            li.innerHTML = step;
+            li.style.marginBottom = '12px';
+        }
+
+        const pandocNote = pandocDetails.createEl('p');
+        pandocNote.innerHTML =
+            '<b>Tip:</b> You can place a <code>reference.docx</code> file in your vault root ' +
+            'to customize Word styling (fonts, heading styles, margins). Generate one with ' +
+            '<code>pandoc -o reference.docx --print-default-data-file reference.docx</code>, ' +
+            'then edit the styles in Word.';
+
+        // ---- Google Docs math (Auto-LaTeX add-on) ----
+        const latexDetails = containerEl.createEl('details');
+        latexDetails.createEl('summary', {
+            text: 'Google Docs — rendering LaTeX equations',
+        });
+
+        const latexIntro = latexDetails.createEl('p');
+        latexIntro.innerHTML =
+            'When publishing to Google Docs, LaTeX math is inserted as <code>$$...$$</code> text. ' +
+            'To render these as formatted equations, install the ' +
+            '<b>Auto-LaTeX Equations</b> add-on in Google Docs:';
+
+        const latexSteps = latexDetails.createEl('ol');
+        const latexInstructions = [
+            'Open a Google Doc',
+            'Go to <b>Extensions → Add-ons → Get add-ons</b>',
+            'Search for <b>"Auto-LaTeX Equations"</b>',
+            'Install it and grant permissions',
+            'After publishing, go to <b>Extensions → Auto-LaTeX Equations → Start</b>',
+            'Click <b>Render Equations</b> — all <code>$$...$$</code> blocks will be converted to equation images',
+        ];
+
+        for (const step of latexInstructions) {
+            latexSteps.createEl('li').innerHTML = step;
+        }
     }
 }

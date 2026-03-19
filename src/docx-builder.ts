@@ -68,7 +68,10 @@ async function renderLatexToPng(latex: string, isDisplay: boolean): Promise<{
     height: number;
 }> {
     const result = await renderLatexToImage(latex, isDisplay);
-    return { data: result.data, width: result.width, height: result.height };
+    // renderLatexToImage returns SVG data — rasterize to actual PNG
+    // since the docx library needs real PNG bytes (type: 'png')
+    const pngData = await rasterizeSvgToPng(result.data);
+    return { data: pngData, width: result.width, height: result.height };
 }
 
 // ---- Image Fetching ----
@@ -181,11 +184,13 @@ async function walkInlineNodes(
         try {
             const src = el.getAttribute('src') || '';
             const widthAttr = el.getAttribute('width');
+            const heightAttr = el.getAttribute('height');
             const { data, width, height } = await fetchImageData(src);
 
-            // Scale image to fit within page width (max 600px)
+            // Prefer HTML attributes (display dimensions) over natural pixel
+            // dimensions, which may be 2x due to retina rasterization
             let imgWidth = widthAttr ? parseInt(widthAttr, 10) : width;
-            let imgHeight = height;
+            let imgHeight = heightAttr ? parseInt(heightAttr, 10) : height;
             const maxWidth = 600;
             if (imgWidth > maxWidth) {
                 const scale = maxWidth / imgWidth;
