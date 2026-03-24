@@ -481,7 +481,24 @@ async function exportToPdfPandoc(
         const vaultBase = (plugin.app.vault.adapter as any).getBasePath();
         const resourceDir = nodePath.join(vaultBase, nodePath.dirname(file.path));
 
-        // 5. Build pandoc args
+        // 5. Platform-aware font selection for XeLaTeX/LuaLaTeX
+        const platform = process.platform;
+        let mainFont: string;
+        let monoFont: string;
+        if (platform === 'win32') {
+            // Cambria has broad Unicode coverage (≈, ×, °, em-dash, etc.)
+            mainFont = 'Cambria';
+            monoFont = 'Consolas';
+        } else if (platform === 'darwin') {
+            mainFont = 'Times New Roman';
+            monoFont = 'Menlo';
+        } else {
+            // Linux — use fonts commonly available or bundled with TeX Live
+            mainFont = 'DejaVu Serif';
+            monoFont = 'DejaVu Sans Mono';
+        }
+
+        // 6. Build pandoc args
         const args = [
             tempMd,
             '-o', saveResult.filePath,
@@ -489,13 +506,11 @@ async function exportToPdfPandoc(
             `--pdf-engine=${pdfEngine}`,
             '--resource-path', resourceDir,
             '-V', 'geometry:margin=1in',
-            // Cambria has broad Unicode coverage (≈, ×, °, em-dash, etc.)
-            // and ships with Windows. Latin Modern lacks many of these glyphs.
-            '-V', 'mainfont:Cambria',
-            '-V', 'monofont:Consolas',
+            '-V', `mainfont:${mainFont}`,
+            '-V', `monofont:${monoFont}`,
         ];
 
-        // 6. Run pandoc
+        // 7. Run pandoc
         console.log('[export] Running pandoc:', args.join(' '));
         await runPandoc(args);
 
